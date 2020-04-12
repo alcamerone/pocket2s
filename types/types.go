@@ -10,7 +10,7 @@ type MessageType int
 const (
 	MessageTypeUnknown MessageType = iota
 	MessageTypeHello
-	MessageTypeStart
+	MessageTypeReady
 	MessageTypeTableState
 	MessageTypePlayerAction
 )
@@ -18,7 +18,7 @@ const (
 var messageTypeStrings = map[MessageType]string{
 	MessageTypeUnknown:      "UNKNOWN",
 	MessageTypeHello:        "HELLO",
-	MessageTypeStart:        "START",
+	MessageTypeReady:        "READY",
 	MessageTypeTableState:   "TABLE_STATE",
 	MessageTypePlayerAction: "PLAYER_ACTION",
 }
@@ -29,7 +29,8 @@ func (t MessageType) String() string {
 
 type Player struct {
 	table.Player
-	Conn *websocket.Conn
+	Conn  *websocket.Conn
+	Ready bool
 }
 
 type FromPlayerMessage struct {

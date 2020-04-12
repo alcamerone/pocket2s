@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 
@@ -13,8 +15,9 @@ import (
 )
 
 var (
-	conn     *websocket.Conn
-	playerId string
+	inputReader *bufio.Reader
+	conn        *websocket.Conn
+	playerId    string
 )
 
 const (
@@ -26,12 +29,19 @@ const (
 	ActionAllIn = "ALLIN"
 )
 
+func getInput() (string, error) {
+	input, err := inputReader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	return input, err
+}
+
 func main() {
 	var err error
+	inputReader = bufio.NewReader(os.Stdin)
 	fmt.Println("Welcome! Who are you?")
 	for {
 		// TODO sanitise
-		_, err = fmt.Scanln(&playerId)
+		playerId, err = getInput()
 		if err == nil {
 			break
 		}
@@ -44,7 +54,7 @@ func main() {
 		WriteBufferSize: 1024,
 	}
 
-	conn, _, err = wsDialler.Dial("http://localhost:2222/connect/"+playerId, nil)
+	conn, _, err = wsDialler.Dial("ws://localhost:2222/connect/"+playerId, nil)
 	if err != nil {
 		log.Fatalf("error establishing connection with server: %s", err.Error())
 	}
@@ -67,14 +77,18 @@ func mainLoop() error {
 		}
 		switch msg.Type {
 		case types.MessageTypeHello:
-			fmt.Println("Connection established to Pocket2s server! Awaiting game start...")
+			fmt.Println("Connection established to Pocket2s server!")
+			fmt.Println("The game will start when there are two or more players and everyone has marked themselves ready.")
+			fmt.Println("Hit Enter when you're ready to start!")
+			awaitPlayerReady(conn)
+			fmt.Println("Okay! Waiting for other players...")
 		case types.MessageTypeTableState:
 			if msg.Result != "" {
 				fmt.Println(msg.Result)
 			}
 			fmt.Printf("Cards: %v, Pot: %d\n", msg.TableState.Cards, msg.TableState.Pot)
 			fmt.Printf(
-				"Your cards: %v. Your chips: %d, in pot %d",
+				"Your cards: %v. Your chips: %d, in pot %d\n",
 				msg.PlayerState.Cards,
 				msg.PlayerState.Chips,
 				msg.PlayerState.ChipsInPot)
@@ -99,6 +113,26 @@ func mainLoop() error {
 	}
 }
 
+func awaitPlayerReady(conn *websocket.Conn) {
+	var err error
+	for {
+		_, err = bufio.NewReader(os.Stdin).ReadString('\n')
+		if err == nil {
+			err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeReady})
+			if err != nil {
+				log.Printf("error sending user ready message: %s", err.Error()) // TODO remove
+				fmt.Println(
+					"Sorry, there was a problem letting the server know you're ready. Please press Enter when you're ready to play!")
+				continue
+			}
+			return
+		}
+		log.Printf("error reading user input: %s", err.Error()) // TODO remove
+		fmt.Println(
+			"Sorry, something went wrong. Please press Enter when you're ready to play!")
+	}
+}
+
 func parsePlayerInput(tableState table.State) table.Action {
 	var (
 		input string
@@ -110,10 +144,11 @@ func parsePlayerInput(tableState table.State) table.Action {
 		fmt.Printf(
 			"It is your turn. What would you like to do? (Valid actions are %v)\n",
 			validActions(tableState))
-		_, err = fmt.Scanln(&input)
+		input, err = getInput()
 		if err != nil {
 			log.Printf("error scanning input: %s", err.Error()) //TODO remove
-			fmt.Println("Sorry, I don't know what that means. What would you like to do?")
+			fmt.Println("Sorry, I don't know what that means.")
+			continue
 		}
 		args = strings.Split(input, " ")
 		switch args[0] {
@@ -140,7 +175,7 @@ func parsePlayerInput(tableState table.State) table.Action {
 		case ActionAllIn:
 			return table.Action{Type: table.AllIn}
 		default:
-			fmt.Println("Sorry, I don't know what that means. What would you like to do?")
+			fmt.Println("Sorry, I don't know what that means.")
 		}
 	}
 }

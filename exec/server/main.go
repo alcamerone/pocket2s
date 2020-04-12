@@ -25,17 +25,18 @@ const (
 )
 
 var (
-	playerMap     map[string]types.Player
+	playerMap     map[string]*types.Player
 	playerMapLock *sync.RWMutex
 	router        *web.Router
 	gameTable     *table.Table
 )
 
 func getPlayerIds() []string {
-	players := gameTable.Seats()
-	playerIds := make([]string, len(players))
-	for i, player := range players {
-		playerIds[i] = player.ID
+	playerMapLock.RLock()
+	defer playerMapLock.RUnlock()
+	playerIds := make([]string, len(playerMap))
+	for _, player := range playerMap {
+		playerIds[player.Seat] = player.ID
 	}
 	return playerIds
 }
@@ -51,14 +52,19 @@ var wsUpgrader = websocket.Upgrader{
 type Context struct{}
 
 func init() {
-	playerMap = make(map[string]types.Player, MAX_PLAYERS)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	playerMap = make(map[string]*types.Player, MAX_PLAYERS)
 	playerMapLock = &sync.RWMutex{}
 	router = web.New(Context{})
 	router.Get("/connect/:playerId", handleConnect)
 }
 
 func main() {
-	http.ListenAndServe(":80", router)
+	log.Println("starting server on port 2222")
+	err := http.ListenAndServe(":2222", router)
+	if err != nil {
+		log.Fatal("error in main loop: " + err.Error())
+	}
 }
 
 func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
@@ -87,13 +93,18 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 
 	playerMapLock.Lock()
 	defer playerMapLock.Unlock()
-	playerMap[playerId] = types.Player{Player: table.Player{ID: playerId}, Conn: conn}
-	log.Printf("player %s has joined", playerId)
+	tablePos := len(playerMap)
+	playerMap[playerId] = &types.Player{
+		Player: table.Player{ID: playerId, Seat: tablePos},
+		Conn:   conn,
+	}
+	log.Printf("%s has joined", playerId)
 	err = conn.WriteJSON(types.ToPlayerMessage{Type: types.MessageTypeHello})
 	if err != nil {
-		// TODO: handle
+		// TODO handle
 		log.Printf("error sending \"hello\" message to player: %s", err.Error())
 	}
+	go listenForPlayerMessages(playerMap[playerId])
 }
 
 // @blocking
@@ -119,29 +130,35 @@ func listenForPlayerMessages(player *types.Player) {
 
 func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) error {
 	switch msg.Type {
-	case types.MessageTypeStart:
-		// START THE GAME ALREADY
-		if gameTable == nil {
-			dealer := hand.NewDealer(
-				rand.New(
-					randSource.NewConcurrencySafeSource(
-						time.Now().UnixNano(),
+	case types.MessageTypeReady:
+		player.Ready = true
+		log.Printf("%s is ready", player.ID)
+		if playersAreReady() {
+			// START THE GAME ALREADY
+			if gameTable == nil {
+				dealer := hand.NewDealer(
+					rand.New(
+						randSource.NewConcurrencySafeSource(
+							time.Now().UnixNano(),
+						),
 					),
-				),
-			)
-			gameTable = table.New(
-				dealer,
-				table.Options{
-					Buyin:   DEFAULT_BUY_IN,
-					Variant: table.TexasHoldem,
-					Stakes: table.Stakes{
-						BigBlind:   DEFAULT_BIG_BLIND,
-						SmallBlind: DEFAULT_SMALL_BLIND,
-						Ante:       0,
+				)
+				gameTable = table.New(
+					dealer,
+					table.Options{
+						Buyin:   DEFAULT_BUY_IN,
+						Variant: table.TexasHoldem,
+						Stakes: table.Stakes{
+							BigBlind:   DEFAULT_BIG_BLIND,
+							SmallBlind: DEFAULT_SMALL_BLIND,
+							Ante:       0,
+						},
+						Limit: table.NoLimit,
 					},
-					Limit: table.NoLimit,
-				},
-				getPlayerIds())
+					getPlayerIds())
+			}
+		} else {
+			return nil
 		}
 	case types.MessageTypePlayerAction:
 		handleActionByPlayer(msg.Action, player)
@@ -155,6 +172,20 @@ func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) 
 		Result:     getResult(gameTable.State()),
 	})
 	return nil
+}
+
+func playersAreReady() bool {
+	playerMapLock.RLock()
+	defer playerMapLock.RUnlock()
+	if len(playerMap) < 2 {
+		return false
+	}
+	for _, player := range playerMap {
+		if !player.Ready {
+			return false
+		}
+	}
+	return true
 }
 
 func handleActionByPlayer(action table.Action, player *types.Player) {
@@ -174,7 +205,8 @@ func handleActionByPlayer(action table.Action, player *types.Player) {
 func obfuscateTableState(tableState table.State) table.State {
 	tableState.Seats = nil
 	active := table.Player{
-		ID: tableState.Active.ID,
+		ID:    tableState.Active.ID,
+		Chips: tableState.Active.Chips,
 	}
 	tableState.Active = active
 	return tableState
@@ -191,13 +223,13 @@ func broadcast(msg types.ToPlayerMessage) {
 		err = retrySend(player, msg)
 		if err != nil {
 			log.Printf("giving up sending state to player %s due to too many errors", player.ID)
-			// TODO: Make this player fold next turn
+			// TODO Make this player fold next turn
 			// and sit out until their connection recovers
 		}
 	}
 }
 
-func getPlayerState(player types.Player, t *table.Table) table.Player {
+func getPlayerState(player *types.Player, t *table.Table) table.Player {
 	for _, s := range t.Seats() {
 		if s.ID == player.ID {
 			return s
@@ -208,7 +240,7 @@ func getPlayerState(player types.Player, t *table.Table) table.Player {
 	return table.Player{}
 }
 
-func retrySend(player types.Player, msg types.ToPlayerMessage) error {
+func retrySend(player *types.Player, msg types.ToPlayerMessage) error {
 	var (
 		backoff time.Duration
 		err     error
@@ -227,20 +259,33 @@ func retrySend(player types.Player, msg types.ToPlayerMessage) error {
 }
 
 func getResult(tableState table.State) string {
-	if tableState.Round != table.PreFlop || tableState.Winners == nil {
+	if tableState.Round != table.PreFlop ||
+		tableState.Result.Winners == nil ||
+		tableState.Result.Contestants == nil ||
+		tableState.Result.TableCards == nil {
 		return ""
 	}
-	winningHands := make([]string, len(tableState.Winners))
+	if len(tableState.Result.Contestants) == 1 {
+		return fmt.Sprintf("%s wins.", tableState.Result.Winners)
+	}
+	resultStr := fmt.Sprintf("Table cards: %v\n", tableState.Result.TableCards)
+	for _, c := range tableState.Result.Contestants {
+		resultStr += fmt.Sprintf("%s: %v\n", c.ID, c.Cards)
+	}
+	winningHands := make([]string, len(tableState.Result.Winners))
 	var h *hand.Hand
-	for i, winner := range tableState.Winners {
-		h = hand.New(append(winner.Cards, tableState.Cards...))
-		winningHands[i] = h.String()
+	for i, winner := range tableState.Result.Winners {
+		h = hand.New(append(winner.Cards, tableState.Result.TableCards...))
+		winningHands[i] = h.Description()
 	}
 	if len(winningHands) == 1 {
-		return fmt.Sprintf("%s wins with %s", tableState.Winners[0].ID, winningHands[0])
+		resultStr += fmt.Sprintf(
+			"%s wins with %s",
+			tableState.Result.Winners[0].ID,
+			winningHands[0])
+		return resultStr
 	}
-	var resultStr string
-	for _, winner := range tableState.Winners {
+	for _, winner := range tableState.Result.Winners {
 		resultStr += winner.ID + ", "
 	}
 	resultStr += "split the pot with "
