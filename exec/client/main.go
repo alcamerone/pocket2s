@@ -28,7 +28,7 @@ const (
 	ActionCall  = "CALL"
 	ActionBet   = "BET"
 	ActionRaise = "RAISE"
-	ActionAllIn = "ALL IN"
+	ActionAllIn = "ALLIN"
 )
 
 func getInput() (string, error) {
@@ -84,13 +84,17 @@ func mainLoop() error {
 			fmt.Println("Connection established to Pocket2s server!")
 			fmt.Println("The game will start when there are two or more players and everyone has marked themselves ready.")
 			fmt.Println("Hit Enter when you're ready to start, or type SIT OUT to sit the first round out.")
-			awaitPlayerReady(conn)
+			awaitPlayerReady(conn, false)
 			fmt.Println("Okay! Waiting for other players...")
 		case types.MessageTypeTableState, types.MessageTypeIllegalAction:
 			if msg.Result != "" {
 				fmt.Println(msg.Result)
-				fmt.Println("Press Enter when you're ready for the next round, or type SIT OUT to sit out the next round.")
-				awaitPlayerReady(conn)
+				if msg.PlayerState.Chips < 1 {
+					fmt.Println("You're broke! Press Enter to buy back in, or type SIT OUT to observe the rest of the game.")
+				} else {
+					fmt.Println("Press Enter when you're ready for the next round, or type SIT OUT to sit out the next round.")
+				}
+				awaitPlayerReady(conn, msg.PlayerState.Chips < 1)
 				fmt.Println("Okay! Waiting for other players...")
 				continue
 			}
@@ -137,7 +141,7 @@ func mainLoop() error {
 	}
 }
 
-func awaitPlayerReady(conn *websocket.Conn) {
+func awaitPlayerReady(conn *websocket.Conn, playerIsBroke bool) {
 	var (
 		input string
 		err   error
@@ -148,7 +152,11 @@ func awaitPlayerReady(conn *websocket.Conn) {
 			if input == SIT_OUT {
 				err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeSitOut})
 			} else {
-				err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeReady})
+				if playerIsBroke {
+					err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeBuyIn})
+				} else {
+					err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeReady})
+				}
 			}
 			if err != nil {
 				log.Printf("error sending user ready message: %s", err.Error()) // TODO remove

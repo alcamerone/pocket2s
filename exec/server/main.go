@@ -197,6 +197,18 @@ func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) 
 		} else {
 			return
 		}
+	case types.MessageTypeBuyIn:
+		if gameTable != nil {
+			err = gameTable.BuyPlayerIn(player.Id)
+			if err != nil {
+				log.Printf("error buying %s in; not found", player.Id)
+			}
+			player.Broke = false
+			handleMessageFromPlayer(
+				types.FromPlayerMessage{Type: types.MessageTypeReady},
+				player)
+			return
+		}
 	case types.MessageTypePlayerAction:
 		state, err = handleActionByPlayer(msg.Action, player)
 		if err != nil {
@@ -228,10 +240,10 @@ func playersAreReady() bool {
 	}
 	var nSittingOut int
 	for _, player := range playerMap {
-		if !player.Ready && !player.SittingOut {
+		if !player.Ready && !player.SittingOut && !player.Broke {
 			return false
 		}
-		if player.SittingOut {
+		if player.SittingOut || player.Broke {
 			nSittingOut++
 		}
 	}
@@ -301,6 +313,9 @@ func broadcast(msg types.ToPlayerMessage) {
 	for _, player := range playerMap {
 		if msg.Type == types.MessageTypeTableState {
 			msg.PlayerState = getPlayerState(player.Id, gameTable)
+			if msg.PlayerState.Chips == 0 && gameTable.State().Status == table.Done {
+				player.Broke = true
+			}
 		}
 		if player.Conn != nil {
 			err = retrySend(player, msg)

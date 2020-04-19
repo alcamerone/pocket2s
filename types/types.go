@@ -12,6 +12,7 @@ const (
 	MessageTypeHello
 	MessageTypeReady
 	MessageTypeSitOut
+	MessageTypeBuyIn
 	MessageTypeTableState
 	MessageTypePlayerAction
 	MessageTypeIllegalAction
@@ -25,6 +26,7 @@ type Player struct {
 	TablePos   int
 	Ready      bool
 	SittingOut bool
+	Broke      bool
 }
 
 type FromPlayerMessage struct {
