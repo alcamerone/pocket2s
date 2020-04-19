@@ -11,26 +11,20 @@ const (
 	MessageTypeUnknown MessageType = iota
 	MessageTypeHello
 	MessageTypeReady
+	MessageTypeSitOut
 	MessageTypeTableState
 	MessageTypePlayerAction
+	MessageTypeIllegalAction
+	MessageTypePlayerConnected
+	MessageTypePlayerDisconnected
 )
 
-var messageTypeStrings = map[MessageType]string{
-	MessageTypeUnknown:      "UNKNOWN",
-	MessageTypeHello:        "HELLO",
-	MessageTypeReady:        "READY",
-	MessageTypeTableState:   "TABLE_STATE",
-	MessageTypePlayerAction: "PLAYER_ACTION",
-}
-
-func (t MessageType) String() string {
-	return messageTypeStrings[t]
-}
-
 type Player struct {
-	table.Player
-	Conn  *websocket.Conn
-	Ready bool
+	Id         string
+	Conn       *websocket.Conn
+	TablePos   int
+	Ready      bool
+	SittingOut bool
 }
 
 type FromPlayerMessage struct {
@@ -40,6 +34,7 @@ type FromPlayerMessage struct {
 
 type ToPlayerMessage struct {
 	Type         MessageType
+	PlayerId     string       `json:",omitempty"`
 	TableState   table.State  `json:",omitempty"`
 	PlayerState  table.Player `json:",omitempty"`
 	PlayerAction PlayerAction `json:",omitempty"`

@@ -14,6 +14,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const SIT_OUT = "SIT OUT"
+
 var (
 	inputReader *bufio.Reader
 	conn        *websocket.Conn
@@ -26,12 +28,13 @@ const (
 	ActionCall  = "CALL"
 	ActionBet   = "BET"
 	ActionRaise = "RAISE"
-	ActionAllIn = "ALLIN"
+	ActionAllIn = "ALL IN"
 )
 
 func getInput() (string, error) {
 	input, err := inputReader.ReadString('\n')
 	input = strings.TrimSpace(input)
+	input = strings.ToUpper(input)
 	return input, err
 }
 
@@ -71,6 +74,7 @@ func mainLoop() error {
 		err error
 	)
 	for {
+		msg = types.ToPlayerMessage{}
 		err = conn.ReadJSON(&msg)
 		if err != nil {
 			return errors.New("error reading message from server: " + err.Error())
@@ -79,23 +83,37 @@ func mainLoop() error {
 		case types.MessageTypeHello:
 			fmt.Println("Connection established to Pocket2s server!")
 			fmt.Println("The game will start when there are two or more players and everyone has marked themselves ready.")
-			fmt.Println("Hit Enter when you're ready to start!")
+			fmt.Println("Hit Enter when you're ready to start, or type SIT OUT to sit the first round out.")
 			awaitPlayerReady(conn)
 			fmt.Println("Okay! Waiting for other players...")
-		case types.MessageTypeTableState:
+		case types.MessageTypeTableState, types.MessageTypeIllegalAction:
 			if msg.Result != "" {
 				fmt.Println(msg.Result)
+				fmt.Println("Press Enter when you're ready for the next round, or type SIT OUT to sit out the next round.")
+				awaitPlayerReady(conn)
+				fmt.Println("Okay! Waiting for other players...")
+				continue
 			}
-			fmt.Printf("Cards: %v, Pot: %d\n", msg.TableState.Cards, msg.TableState.Pot)
+			if msg.Type == types.MessageTypeIllegalAction {
+				fmt.Println("Sorry, that action's not allowed.")
+			}
 			fmt.Printf(
-				"Your cards: %v. Your chips: %d, in pot %d\n",
-				msg.PlayerState.Cards,
-				msg.PlayerState.Chips,
-				msg.PlayerState.ChipsInPot)
+				"Dealer: %s\nSmall Blind: %s\nBig Blind: %s\n",
+				msg.TableState.Dealer.ID,
+				msg.TableState.SmallBlind.ID,
+				msg.TableState.BigBlind.ID)
+			fmt.Printf("Cards: %v, Pot: %d\n", msg.TableState.Cards, msg.TableState.Pot)
+			if !msg.PlayerState.SittingOut {
+				fmt.Printf(
+					"Your cards: %v. Your chips: %d, in pot %d\n",
+					msg.PlayerState.Cards,
+					msg.PlayerState.Chips,
+					msg.PlayerState.ChipsInPot)
+			}
 			if msg.TableState.Active.ID != playerId {
 				fmt.Printf("It is %s's turn...\n", msg.TableState.Active.ID)
 			} else {
-				action := parsePlayerInput(msg.TableState)
+				action := parseTableAction(msg.TableState)
 				err := conn.WriteJSON(
 					types.FromPlayerMessage{
 						Type:   types.MessageTypePlayerAction,
@@ -109,16 +127,29 @@ func mainLoop() error {
 			}
 		case types.MessageTypePlayerAction:
 			fmt.Println(stringifyPlayerAction(msg.PlayerAction))
+		case types.MessageTypePlayerConnected:
+			fmt.Printf("Player %s has entered the game!\n", msg.PlayerId)
+		case types.MessageTypePlayerDisconnected:
+			fmt.Printf(
+				"Lost connection to player %s, they will sit out until they return.\n",
+				msg.PlayerId)
 		}
 	}
 }
 
 func awaitPlayerReady(conn *websocket.Conn) {
-	var err error
+	var (
+		input string
+		err   error
+	)
 	for {
-		_, err = bufio.NewReader(os.Stdin).ReadString('\n')
+		input, err = getInput()
 		if err == nil {
-			err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeReady})
+			if input == SIT_OUT {
+				err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeSitOut})
+			} else {
+				err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeReady})
+			}
 			if err != nil {
 				log.Printf("error sending user ready message: %s", err.Error()) // TODO remove
 				fmt.Println(
@@ -133,7 +164,7 @@ func awaitPlayerReady(conn *websocket.Conn) {
 	}
 }
 
-func parsePlayerInput(tableState table.State) table.Action {
+func parseTableAction(tableState table.State) table.Action {
 	var (
 		input string
 		err   error
@@ -187,6 +218,7 @@ func validActions(tableState table.State) []string {
 	if tableState.Owed > tableState.Active.Chips {
 		return []string{ActionFold, ActionCall}
 	}
+	fmt.Printf("Call cost is %d.\n", tableState.Owed)
 	return []string{ActionFold, ActionCall, ActionRaise, ActionAllIn}
 }
 

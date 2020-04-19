@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	MAX_PLAYERS         = 8
+	MAX_PLAYERS         = 20
 	DEFAULT_BUY_IN      = 10000
 	DEFAULT_BIG_BLIND   = 100
 	DEFAULT_SMALL_BLIND = 50
@@ -36,7 +36,7 @@ func getPlayerIds() []string {
 	defer playerMapLock.RUnlock()
 	playerIds := make([]string, len(playerMap))
 	for _, player := range playerMap {
-		playerIds[player.Seat] = player.ID
+		playerIds[player.TablePos] = player.Id
 	}
 	return playerIds
 }
@@ -72,9 +72,9 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 
 	playerMapLock.RLock()
 	tableFull := len(playerMap) > MAX_PLAYERS
-	_, ok := playerMap[playerId]
+	existingPlayer, playerExists := playerMap[playerId]
 	playerMapLock.RUnlock()
-	if ok {
+	if playerExists && existingPlayer.Conn != nil {
 		log.Printf("error: a player named %s is already at the table")
 		rw.WriteHeader(http.StatusConflict)
 		return
@@ -91,19 +91,31 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 		return
 	}
 
-	playerMapLock.Lock()
-	defer playerMapLock.Unlock()
-	tablePos := len(playerMap)
-	playerMap[playerId] = &types.Player{
-		Player: table.Player{ID: playerId, Seat: tablePos},
-		Conn:   conn,
+	if playerExists {
+		existingPlayer.Conn = conn
+		existingPlayer.Ready = false
+		existingPlayer.SittingOut = true
+		log.Printf("%s has rejoined", playerId)
+	} else {
+		playerMapLock.Lock()
+		tablePos := len(playerMap)
+		playerMap[playerId] = &types.Player{
+			Id:       playerId,
+			TablePos: tablePos,
+			Conn:     conn,
+		}
+		playerMapLock.Unlock()
+		log.Printf("%s has joined", playerId)
 	}
-	log.Printf("%s has joined", playerId)
 	err = conn.WriteJSON(types.ToPlayerMessage{Type: types.MessageTypeHello})
 	if err != nil {
 		// TODO handle
 		log.Printf("error sending \"hello\" message to player: %s", err.Error())
 	}
+	broadcast(types.ToPlayerMessage{
+		Type:     types.MessageTypePlayerConnected,
+		PlayerId: playerId,
+	})
 	go listenForPlayerMessages(playerMap[playerId])
 }
 
@@ -117,23 +129,43 @@ func listenForPlayerMessages(player *types.Player) {
 		err = player.Conn.ReadJSON(&msg)
 		if err != nil {
 			if isClosedConnectionError(err.Error()) {
-				// TODO handle
-				log.Printf("connection to %s closed with %s", player.ID, err.Error())
+				handlePlayerError(player, err)
+				player.Conn = nil
 				break
 			}
-			log.Printf("error receiving message from %s: %s", player.ID, err.Error())
+			log.Printf("error receiving message from %s: %s", player.Id, err.Error())
 			continue
 		}
 		handleMessageFromPlayer(msg, player)
 	}
 }
 
-func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) error {
+func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) {
+	var (
+		state table.State
+		err   error
+	)
 	switch msg.Type {
-	case types.MessageTypeReady:
-		player.Ready = true
-		log.Printf("%s is ready", player.ID)
-		if playersAreReady() {
+	case types.MessageTypeReady, types.MessageTypeSitOut:
+		isReady := msg.Type == types.MessageTypeReady
+		player.Ready = isReady
+		player.SittingOut = !isReady
+		if gameTable != nil {
+			pState := getPlayerState(player.Id, gameTable)
+			if pState.ID == player.Id {
+				// Player already seated at table
+				gameTable.SetPlayerDefaulting(player.Id, !isReady)
+			} else {
+				gameTable.AddPlayer(player.Id, !isReady)
+			}
+		}
+		if isReady {
+			log.Printf("%s is ready", player.Id)
+		} else {
+			log.Printf("%s is sitting out", player.Id)
+		}
+		if (gameTable == nil || gameTable.State().Status == table.Done) &&
+			playersAreReady() {
 			// START THE GAME ALREADY
 			if gameTable == nil {
 				dealer := hand.NewDealer(
@@ -153,25 +185,39 @@ func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) 
 							SmallBlind: DEFAULT_SMALL_BLIND,
 							Ante:       0,
 						},
-						Limit: table.NoLimit,
+						Limit:   table.NoLimit,
+						OneShot: true,
 					},
-					getPlayerIds())
+					getPlayerIds(),
+					getPlayersSittingOut())
+				state = gameTable.State()
+			} else {
+				state = gameTable.NewRound()
 			}
 		} else {
-			return nil
+			return
 		}
 	case types.MessageTypePlayerAction:
-		handleActionByPlayer(msg.Action, player)
+		state, err = handleActionByPlayer(msg.Action, player)
+		if err != nil {
+			log.Println(err.Error())
+			return
+		}
 	default:
-		return fmt.Errorf("invalid message type %d", msg.Type)
+		log.Printf("invalid message type %d", msg.Type)
+		return
 	}
-	tableState := obfuscateTableState(gameTable.State())
+	tableState := obfuscateTableState(state)
+	result := getResult(state)
 	broadcast(types.ToPlayerMessage{
 		Type:       types.MessageTypeTableState,
 		TableState: tableState,
-		Result:     getResult(gameTable.State()),
+		Result:     result,
 	})
-	return nil
+	if result != "" {
+		resetPlayersReady()
+	}
+	return
 }
 
 func playersAreReady() bool {
@@ -180,33 +226,69 @@ func playersAreReady() bool {
 	if len(playerMap) < 2 {
 		return false
 	}
+	var nSittingOut int
 	for _, player := range playerMap {
-		if !player.Ready {
+		if !player.Ready && !player.SittingOut {
 			return false
 		}
+		if player.SittingOut {
+			nSittingOut++
+		}
+	}
+	if len(playerMap)-nSittingOut < 2 {
+		return false
 	}
 	return true
 }
 
-func handleActionByPlayer(action table.Action, player *types.Player) {
-	if player.ID != gameTable.Active().ID {
-		log.Printf("ignoring action request %s from player %s as it is not their turn")
+func resetPlayersReady() {
+	playerMapLock.RLock()
+	defer playerMapLock.RUnlock()
+	for id := range playerMap {
+		playerMap[id].Ready = false
 	}
-	err := gameTable.Act(action)
+}
+
+func getPlayersSittingOut() []string {
+	sittingOut := make([]string, 0)
+	for _, p := range playerMap {
+		if p.SittingOut {
+			sittingOut = append(sittingOut, p.Id)
+		}
+	}
+	return sittingOut
+}
+
+func handleActionByPlayer(action table.Action, player *types.Player) (table.State, error) {
+	if player.Id != gameTable.Active().ID {
+		return table.State{}, fmt.Errorf(
+			"ignoring action request %s from player %s as it is not their turn",
+			action.Type.String(),
+			player.Id)
+	}
+	state, err := gameTable.Act(action)
 	if err != nil {
-		log.Printf("%s by player %s", err.Error(), player.ID)
+		// TODO handle error
+		player.Conn.WriteJSON(types.ToPlayerMessage{
+			Type:        types.MessageTypeIllegalAction,
+			TableState:  obfuscateTableState(gameTable.State()),
+			PlayerState: getPlayerState(player.Id, gameTable),
+		})
+		return table.State{}, fmt.Errorf("%s by player %s", err.Error(), player.Id)
 	}
 	broadcast(types.ToPlayerMessage{
 		Type:         types.MessageTypePlayerAction,
-		PlayerAction: types.PlayerAction{Action: action, PlayerId: player.ID},
+		PlayerAction: types.PlayerAction{Action: action, PlayerId: player.Id},
 	})
+	return state, err
 }
 
 func obfuscateTableState(tableState table.State) table.State {
 	tableState.Seats = nil
 	active := table.Player{
-		ID:    tableState.Active.ID,
-		Chips: tableState.Active.Chips,
+		ID:         tableState.Active.ID,
+		Chips:      tableState.Active.Chips,
+		ChipsInPot: tableState.Active.ChipsInPot,
 	}
 	tableState.Active = active
 	return tableState
@@ -218,25 +300,25 @@ func broadcast(msg types.ToPlayerMessage) {
 	defer playerMapLock.RUnlock()
 	for _, player := range playerMap {
 		if msg.Type == types.MessageTypeTableState {
-			msg.PlayerState = getPlayerState(player, gameTable)
+			msg.PlayerState = getPlayerState(player.Id, gameTable)
 		}
-		err = retrySend(player, msg)
-		if err != nil {
-			log.Printf("giving up sending state to player %s due to too many errors", player.ID)
-			// TODO Make this player fold next turn
-			// and sit out until their connection recovers
+		if player.Conn != nil {
+			err = retrySend(player, msg)
+			if err != nil {
+				log.Printf("giving up sending state to player %s due to too many errors", player.Id)
+				handlePlayerError(player, err)
+			}
 		}
 	}
 }
 
-func getPlayerState(player *types.Player, t *table.Table) table.Player {
+func getPlayerState(playerId string, t *table.Table) table.Player {
 	for _, s := range t.Seats() {
-		if s.ID == player.ID {
+		if s.ID == playerId {
 			return s
 		}
 	}
-	// TODO handle
-	log.Printf("could not find player %s at table", player.ID)
+	log.Printf("could not find player %s at table", playerId)
 	return table.Player{}
 }
 
@@ -251,22 +333,50 @@ func retrySend(player *types.Player, msg types.ToPlayerMessage) error {
 		if err == nil {
 			return nil
 		}
-		log.Printf("error sending state to player %s: %s", player.ID, err.Error())
+		if isClosedConnectionError(err.Error()) {
+			player.Conn.Close()
+			return err
+		}
+		log.Printf("error sending state to player %s: %s", player.Id, err.Error())
 		time.Sleep(backoff)
 		backoff *= 2
 	}
+	player.Conn.Close()
 	return err
 }
 
+func handlePlayerError(player *types.Player, err error) {
+	log.Printf("connection to %s closed with %s", player.Id, err.Error())
+	log.Printf("%s is sitting out pending reconnection", player.Id)
+	player.Conn = nil
+	player.SittingOut = true
+	broadcast(types.ToPlayerMessage{
+		Type:     types.MessageTypePlayerDisconnected,
+		PlayerId: player.Id,
+	})
+	if gameTable != nil {
+		gameTable.SetPlayerDefaulting(player.Id, true)
+		if gameTable.State().Active.ID == player.Id {
+			handleMessageFromPlayer(
+				types.FromPlayerMessage{
+					Type: types.MessageTypePlayerAction,
+					Action: table.Action{
+						Type: table.Fold,
+					},
+				},
+				player)
+		}
+	}
+}
+
 func getResult(tableState table.State) string {
-	if tableState.Round != table.PreFlop ||
-		tableState.Result.Winners == nil ||
+	if tableState.Result.Winners == nil ||
 		tableState.Result.Contestants == nil ||
 		tableState.Result.TableCards == nil {
 		return ""
 	}
 	if len(tableState.Result.Contestants) == 1 {
-		return fmt.Sprintf("%s wins.", tableState.Result.Winners)
+		return fmt.Sprintf("%s wins.", tableState.Result.Winners[0].ID)
 	}
 	resultStr := fmt.Sprintf("Table cards: %v\n", tableState.Result.TableCards)
 	for _, c := range tableState.Result.Contestants {
@@ -299,6 +409,7 @@ func getResult(tableState table.State) string {
 func isClosedConnectionError(errStr string) bool {
 	return strings.Contains(errStr, "use of closed network connection") ||
 		strings.Contains(errStr, "Broken pipe") ||
+		strings.Contains(errStr, "broken pipe") ||
 		strings.Contains(errStr, "unexpected EOF") ||
 		strings.Contains(errStr, "going away") ||
 		strings.Contains(errStr, "connection reset by peer")
