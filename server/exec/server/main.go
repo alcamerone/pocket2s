@@ -1,5 +1,6 @@
 /*    package "server/main" defines the Pocket2s server.
  *    Copyright (C) 2020 Cameron Ekblad.
+ *    Email: al.camerone@gmail.com
  *
  *    This program is free software: you can redistribute it and/or modify
  *    it under the terms of the GNU Affero General Public License as published
@@ -35,24 +36,34 @@ import (
 )
 
 const (
-	MAX_PLAYERS         = 20
-	DEFAULT_BUY_IN      = 10000
-	DEFAULT_BIG_BLIND   = 100
-	DEFAULT_SMALL_BLIND = 50
+	MAX_PLAYERS         = 6
+	DEFAULT_BUY_IN      = 2000
+	DEFAULT_BIG_BLIND   = 20
+	DEFAULT_SMALL_BLIND = 10
 )
+
+type playerMap struct {
+	sync.RWMutex
+	players map[string]*types.Player
+}
+
+type room struct {
+	id        string
+	playerMap playerMap
+	gameTable *table.Table
+}
 
 var (
-	playerMap     map[string]*types.Player
-	playerMapLock *sync.RWMutex
-	router        *web.Router
-	gameTable     *table.Table
+	router   *web.Router
+	roomMap  = make(map[string]*room)
+	roomLock = sync.RWMutex{}
 )
 
-func getPlayerIds() []string {
-	playerMapLock.RLock()
-	defer playerMapLock.RUnlock()
-	playerIds := make([]string, len(playerMap))
-	for _, player := range playerMap {
+func (r *room) getPlayerIds() []string {
+	r.playerMap.RLock()
+	defer r.playerMap.RUnlock()
+	playerIds := make([]string, len(r.playerMap.players))
+	for _, player := range r.playerMap.players {
 		playerIds[player.TablePos] = player.Id
 	}
 	return playerIds
@@ -70,10 +81,17 @@ type Context struct{}
 
 func init() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	playerMap = make(map[string]*types.Player, MAX_PLAYERS)
-	playerMapLock = &sync.RWMutex{}
+
+	// TODO default room for dev. Remove before prod
+	roomMap["pocket2s"] = &room{
+		id: "pocket2s",
+		playerMap: playerMap{
+			players: make(map[string]*types.Player, MAX_PLAYERS),
+		},
+	}
 	router = web.New(Context{})
-	router.Get("/connect/:playerId", handleConnect)
+	router.Post("/create/:roomId", handleCreateRoom).
+		Get("/connect/:roomId/:playerId", handleConnect)
 }
 
 func main() {
@@ -84,13 +102,44 @@ func main() {
 	}
 }
 
+func handleCreateRoom(ctx *Context, rw web.ResponseWriter, req *web.Request) {
+	roomId := req.PathParams["roomId"]
+	roomLock.RLock()
+	if room := roomMap[roomId]; room != nil {
+		log.Printf("error: a room named %s already exists", roomId)
+		rw.WriteHeader(http.StatusConflict)
+		roomLock.RUnlock()
+		return
+	}
+	roomLock.RUnlock()
+
+	roomLock.Lock()
+	defer roomLock.Unlock()
+	roomMap[roomId] = &room{
+		id: roomId,
+		playerMap: playerMap{
+			players: make(map[string]*types.Player, MAX_PLAYERS),
+		},
+	}
+	rw.WriteHeader(http.StatusCreated)
+}
+
 func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
+	roomId := req.PathParams["roomId"]
+	var r *room
+	roomLock.Lock()
+	defer roomLock.Unlock()
+	if r = roomMap[roomId]; r == nil {
+		log.Printf("error: room %s does not exist", roomId)
+		rw.WriteHeader(http.StatusNotFound)
+		return
+	}
+
 	playerId := req.PathParams["playerId"]
 
-	playerMapLock.RLock()
-	tableFull := len(playerMap) > MAX_PLAYERS
-	existingPlayer, playerExists := playerMap[playerId]
-	playerMapLock.RUnlock()
+	r.playerMap.Lock()
+	tableFull := len(r.playerMap.players) > MAX_PLAYERS
+	existingPlayer, playerExists := r.playerMap.players[playerId]
 	if playerExists && existingPlayer.Conn != nil {
 		log.Printf("error: a player named %s is already at the table")
 		rw.WriteHeader(http.StatusConflict)
@@ -99,6 +148,7 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 	if tableFull {
 		log.Printf("error: the table already has the maximum number of players")
 		rw.WriteHeader(http.StatusLocked)
+		return
 	}
 
 	conn, err := wsUpgrader.Upgrade(rw, req.Request, nil)
@@ -114,14 +164,12 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 		existingPlayer.SittingOut = true
 		log.Printf("%s has rejoined", playerId)
 	} else {
-		playerMapLock.Lock()
-		tablePos := len(playerMap)
-		playerMap[playerId] = &types.Player{
+		tablePos := len(r.playerMap.players)
+		r.playerMap.players[playerId] = &types.Player{
 			Id:       playerId,
 			TablePos: tablePos,
 			Conn:     conn,
 		}
-		playerMapLock.Unlock()
 		log.Printf("%s has joined", playerId)
 	}
 	err = conn.WriteJSON(types.ToPlayerMessage{Type: types.MessageTypeHello})
@@ -129,15 +177,16 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 		// TODO handle
 		log.Printf("error sending \"hello\" message to player: %s", err.Error())
 	}
-	broadcast(types.ToPlayerMessage{
+	r.playerMap.Unlock()
+	r.broadcast(types.ToPlayerMessage{
 		Type:     types.MessageTypePlayerConnected,
 		PlayerId: playerId,
 	})
-	go listenForPlayerMessages(playerMap[playerId])
+	go listenForPlayerMessages(r.playerMap.players[playerId], r)
 }
 
 // @blocking
-func listenForPlayerMessages(player *types.Player) {
+func listenForPlayerMessages(player *types.Player, r *room) {
 	var (
 		msg types.FromPlayerMessage
 		err error
@@ -146,18 +195,21 @@ func listenForPlayerMessages(player *types.Player) {
 		err = player.Conn.ReadJSON(&msg)
 		if err != nil {
 			if isClosedConnectionError(err.Error()) {
-				handlePlayerError(player, err)
+				r.handlePlayerError(player, err)
 				player.Conn = nil
 				break
 			}
 			log.Printf("error receiving message from %s: %s", player.Id, err.Error())
 			continue
 		}
-		handleMessageFromPlayer(msg, player)
+		r.handleMessageFromPlayer(msg, player)
 	}
 }
 
-func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) {
+func (r *room) handleMessageFromPlayer(
+	msg types.FromPlayerMessage,
+	player *types.Player,
+) {
 	var (
 		state table.State
 		err   error
@@ -167,13 +219,13 @@ func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) 
 		isReady := msg.Type == types.MessageTypeReady
 		player.Ready = isReady
 		player.SittingOut = !isReady
-		if gameTable != nil {
-			pState := getPlayerState(player.Id, gameTable)
+		if r.gameTable != nil {
+			pState := getPlayerState(player.Id, r.gameTable)
 			if pState.ID == player.Id {
 				// Player already seated at table
-				gameTable.SetPlayerDefaulting(player.Id, !isReady)
+				r.gameTable.SetPlayerDefaulting(player.Id, !isReady)
 			} else {
-				gameTable.AddPlayer(player.Id, !isReady)
+				r.gameTable.AddPlayer(player.Id, !isReady)
 			}
 		}
 		if isReady {
@@ -181,10 +233,10 @@ func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) 
 		} else {
 			log.Printf("%s is sitting out", player.Id)
 		}
-		if (gameTable == nil || gameTable.State().Status == table.Done) &&
-			playersAreReady() {
+		if (r.gameTable == nil || r.gameTable.State().Status == table.Done) &&
+			r.playersAreReady() {
 			// START THE GAME ALREADY
-			if gameTable == nil {
+			if r.gameTable == nil {
 				dealer := hand.NewDealer(
 					rand.New(
 						randSource.NewConcurrencySafeSource(
@@ -192,7 +244,7 @@ func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) 
 						),
 					),
 				)
-				gameTable = table.New(
+				r.gameTable = table.New(
 					dealer,
 					table.Options{
 						Buyin:   DEFAULT_BUY_IN,
@@ -205,29 +257,29 @@ func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) 
 						Limit:   table.NoLimit,
 						OneShot: true,
 					},
-					getPlayerIds(),
-					getPlayersSittingOut())
-				state = gameTable.State()
+					r.getPlayerIds(),
+					r.getPlayersSittingOut())
+				state = r.gameTable.State()
 			} else {
-				state = gameTable.NewRound()
+				state = r.gameTable.NewRound()
 			}
 		} else {
 			return
 		}
 	case types.MessageTypeBuyIn:
-		if gameTable != nil {
-			err = gameTable.BuyPlayerIn(player.Id)
+		if r.gameTable != nil {
+			err = r.gameTable.BuyPlayerIn(player.Id)
 			if err != nil {
 				log.Printf("error buying %s in; not found", player.Id)
 			}
 			player.Broke = false
-			handleMessageFromPlayer(
+			r.handleMessageFromPlayer(
 				types.FromPlayerMessage{Type: types.MessageTypeReady},
 				player)
 			return
 		}
 	case types.MessageTypePlayerAction:
-		state, err = handleActionByPlayer(msg.Action, player)
+		state, err = r.handleActionByPlayer(msg.Action, player)
 		if err != nil {
 			log.Println(err.Error())
 			return
@@ -238,25 +290,25 @@ func handleMessageFromPlayer(msg types.FromPlayerMessage, player *types.Player) 
 	}
 	tableState := obfuscateTableState(state)
 	result := getResult(state)
-	broadcast(types.ToPlayerMessage{
+	r.broadcast(types.ToPlayerMessage{
 		Type:       types.MessageTypeTableState,
 		TableState: tableState,
 		Result:     result,
 	})
 	if result != "" {
-		resetPlayersReady()
+		r.resetPlayersReady()
 	}
 	return
 }
 
-func playersAreReady() bool {
-	playerMapLock.RLock()
-	defer playerMapLock.RUnlock()
-	if len(playerMap) < 2 {
+func (r *room) playersAreReady() bool {
+	r.playerMap.RLock()
+	defer r.playerMap.RUnlock()
+	if len(r.playerMap.players) < 2 {
 		return false
 	}
 	var nSittingOut int
-	for _, player := range playerMap {
+	for _, player := range r.playerMap.players {
 		if !player.Ready && !player.SittingOut && !player.Broke {
 			return false
 		}
@@ -264,23 +316,25 @@ func playersAreReady() bool {
 			nSittingOut++
 		}
 	}
-	if len(playerMap)-nSittingOut < 2 {
+	if len(r.playerMap.players)-nSittingOut < 2 {
 		return false
 	}
 	return true
 }
 
-func resetPlayersReady() {
-	playerMapLock.RLock()
-	defer playerMapLock.RUnlock()
-	for id := range playerMap {
-		playerMap[id].Ready = false
+func (r *room) resetPlayersReady() {
+	r.playerMap.RLock()
+	defer r.playerMap.RUnlock()
+	for id := range r.playerMap.players {
+		r.playerMap.players[id].Ready = false
 	}
 }
 
-func getPlayersSittingOut() []string {
+func (r *room) getPlayersSittingOut() []string {
+	r.playerMap.RLock()
+	defer r.playerMap.RUnlock()
 	sittingOut := make([]string, 0)
-	for _, p := range playerMap {
+	for _, p := range r.playerMap.players {
 		if p.SittingOut {
 			sittingOut = append(sittingOut, p.Id)
 		}
@@ -288,24 +342,24 @@ func getPlayersSittingOut() []string {
 	return sittingOut
 }
 
-func handleActionByPlayer(action table.Action, player *types.Player) (table.State, error) {
-	if player.Id != gameTable.Active().ID {
+func (r *room) handleActionByPlayer(action table.Action, player *types.Player) (table.State, error) {
+	if player.Id != r.gameTable.Active().ID {
 		return table.State{}, fmt.Errorf(
 			"ignoring action request %s from player %s as it is not their turn",
 			action.Type.String(),
 			player.Id)
 	}
-	state, err := gameTable.Act(action)
+	state, err := r.gameTable.Act(action)
 	if err != nil {
 		// TODO handle error
 		player.Conn.WriteJSON(types.ToPlayerMessage{
 			Type:        types.MessageTypeIllegalAction,
-			TableState:  obfuscateTableState(gameTable.State()),
-			PlayerState: getPlayerState(player.Id, gameTable),
+			TableState:  obfuscateTableState(r.gameTable.State()),
+			PlayerState: getPlayerState(player.Id, r.gameTable),
 		})
 		return table.State{}, fmt.Errorf("%s by player %s", err.Error(), player.Id)
 	}
-	broadcast(types.ToPlayerMessage{
+	r.broadcast(types.ToPlayerMessage{
 		Type:         types.MessageTypePlayerAction,
 		PlayerAction: types.PlayerAction{Action: action, PlayerId: player.Id},
 	})
@@ -313,7 +367,22 @@ func handleActionByPlayer(action table.Action, player *types.Player) (table.Stat
 }
 
 func obfuscateTableState(tableState table.State) table.State {
-	tableState.Seats = nil
+	seats := make([]table.Player, len(tableState.Seats))
+	for i, player := range tableState.Seats {
+		seats[i] = table.Player{
+			ID:    player.ID,
+			Chips: player.Chips,
+		}
+		if tableState.Status != table.Done {
+			seats[i].ChipsInPot = player.ChipsInPot
+		}
+		if tableState.Status == table.Done &&
+			len(tableState.Result.Contestants) > 1 &&
+			playerIsContesting(player.ID, tableState) {
+			seats[i].Cards = player.Cards
+		}
+	}
+	tableState.Seats = seats
 	active := table.Player{
 		ID:         tableState.Active.ID,
 		Chips:      tableState.Active.Chips,
@@ -323,22 +392,34 @@ func obfuscateTableState(tableState table.State) table.State {
 	return tableState
 }
 
-func broadcast(msg types.ToPlayerMessage) {
+func playerIsContesting(playerId string, tableState table.State) bool {
+	for _, contestant := range tableState.Result.Contestants {
+		if contestant.ID == playerId {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *room) broadcast(msg types.ToPlayerMessage) {
 	var err error
-	playerMapLock.RLock()
-	defer playerMapLock.RUnlock()
-	for _, player := range playerMap {
+	r.playerMap.RLock()
+	defer r.playerMap.RUnlock()
+	for _, player := range r.playerMap.players {
 		if msg.Type == types.MessageTypeTableState {
-			msg.PlayerState = getPlayerState(player.Id, gameTable)
-			if msg.PlayerState.Chips == 0 && gameTable.State().Status == table.Done {
+			msg.PlayerState = getPlayerState(player.Id, r.gameTable)
+			if msg.PlayerState.Chips == 0 && r.gameTable.State().Status == table.Done {
 				player.Broke = true
 			}
 		}
 		if player.Conn != nil {
 			err = retrySend(player, msg)
 			if err != nil {
-				log.Printf("giving up sending state to player %s due to too many errors", player.Id)
-				handlePlayerError(player, err)
+				log.Printf(
+					"giving up sending state to player %s in room %s due to too many errors",
+					player.Id,
+					r.id)
+				r.handlePlayerError(player, err)
 			}
 		}
 	}
@@ -377,19 +458,19 @@ func retrySend(player *types.Player, msg types.ToPlayerMessage) error {
 	return err
 }
 
-func handlePlayerError(player *types.Player, err error) {
+func (r *room) handlePlayerError(player *types.Player, err error) {
 	log.Printf("connection to %s closed with %s", player.Id, err.Error())
 	log.Printf("%s is sitting out pending reconnection", player.Id)
 	player.Conn = nil
 	player.SittingOut = true
-	broadcast(types.ToPlayerMessage{
+	r.broadcast(types.ToPlayerMessage{
 		Type:     types.MessageTypePlayerDisconnected,
 		PlayerId: player.Id,
 	})
-	if gameTable != nil {
-		gameTable.SetPlayerDefaulting(player.Id, true)
-		if gameTable.State().Active.ID == player.Id {
-			handleMessageFromPlayer(
+	if r.gameTable != nil {
+		r.gameTable.SetPlayerDefaulting(player.Id, true)
+		if r.gameTable.State().Active.ID == player.Id {
+			r.handleMessageFromPlayer(
 				types.FromPlayerMessage{
 					Type: types.MessageTypePlayerAction,
 					Action: table.Action{
@@ -410,10 +491,11 @@ func getResult(tableState table.State) string {
 	if len(tableState.Result.Contestants) == 1 {
 		return fmt.Sprintf("%s wins.", tableState.Result.Winners[0].ID)
 	}
-	resultStr := fmt.Sprintf("Table cards: %v\n", tableState.Result.TableCards)
+	resultStr := ""
+	/*resultStr := fmt.Sprintf("Table cards: %v\n", tableState.Result.TableCards)
 	for _, c := range tableState.Result.Contestants {
 		resultStr += fmt.Sprintf("%s: %v\n", c.ID, c.Cards)
-	}
+	}*/
 	winningHands := make([]string, len(tableState.Result.Winners))
 	var h *hand.Hand
 	for i, winner := range tableState.Result.Winners {

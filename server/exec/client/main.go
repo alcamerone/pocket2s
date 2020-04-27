@@ -1,5 +1,6 @@
 /*    package "client/main" defines the test CLI client for the Pocket2s server.
  *    Copyright (C) 2020 Cameron Ekblad.
+ *    Email: al.camerone@gmail.com
  *
  *    This program is free software: you can redistribute it and/or modify
  *    it under the terms of the GNU Affero General Public License as published
@@ -25,6 +26,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/alcamerone/joker/table"
 	"github.com/alcamerone/pocket2s/types"
@@ -36,6 +38,7 @@ const SIT_OUT = "SIT OUT"
 var (
 	inputReader *bufio.Reader
 	conn        *websocket.Conn
+	roomId      string
 	playerId    string
 )
 
@@ -48,10 +51,12 @@ const (
 	ActionAllIn = "ALLIN"
 )
 
-func getInput() (string, error) {
+func getInput(toUpper bool) (string, error) {
 	input, err := inputReader.ReadString('\n')
 	input = strings.TrimSpace(input)
-	input = strings.ToUpper(input)
+	if toUpper {
+		input = strings.ToUpper(input)
+	}
 	return input, err
 }
 
@@ -61,20 +66,31 @@ func main() {
 	fmt.Println("Welcome! Who are you?")
 	for {
 		// TODO sanitise
-		playerId, err = getInput()
+		playerId, err = getInput(false)
 		if err == nil {
 			break
 		}
 		log.Printf("error scanning: %s", err.Error()) //TODO remove
 		fmt.Println("Sorry, we can't use that name. Try another one:")
 	}
-
-	wsDialler := websocket.Dialer{
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
+	fmt.Println("Great! Now which room would you like to join?")
+	for {
+		// TODO sanitise
+		roomId, err = getInput(false)
+		if err == nil {
+			break
+		}
+		log.Printf("error scanning: %s", err.Error()) //TODO remove
+		fmt.Println("Sorry, we can't use that room. Try another one:")
 	}
 
-	conn, _, err = wsDialler.Dial("ws://localhost:2222/connect/"+playerId, nil)
+	wsDialler := websocket.Dialer{
+		ReadBufferSize:   1024,
+		WriteBufferSize:  1024,
+		HandshakeTimeout: 30 * time.Second,
+	}
+
+	conn, _, err = wsDialler.Dial("ws://localhost:2222/connect/"+roomId+"/"+playerId, nil)
 	if err != nil {
 		log.Fatalf("error establishing connection with server: %s", err.Error())
 	}
@@ -164,7 +180,7 @@ func awaitPlayerReady(conn *websocket.Conn, playerIsBroke bool) {
 		err   error
 	)
 	for {
-		input, err = getInput()
+		input, err = getInput(true)
 		if err == nil {
 			if input == SIT_OUT {
 				err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeSitOut})
@@ -200,7 +216,7 @@ func parseTableAction(tableState table.State) table.Action {
 		fmt.Printf(
 			"It is your turn. What would you like to do? (Valid actions are %v)\n",
 			validActions(tableState))
-		input, err = getInput()
+		input, err = getInput(true)
 		if err != nil {
 			log.Printf("error scanning input: %s", err.Error()) //TODO remove
 			fmt.Println("Sorry, I don't know what that means.")
