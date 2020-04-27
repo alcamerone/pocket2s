@@ -442,6 +442,10 @@ func retrySend(player *types.Player, msg types.ToPlayerMessage) error {
 	)
 	backoff = 100 * time.Millisecond
 	for i := 0; i < 5; i++ {
+		if player.Conn == nil {
+			// Player has gone away; probably handled elsewhere
+			return nil
+		}
 		err = player.Conn.WriteJSON(msg)
 		if err == nil {
 			return nil

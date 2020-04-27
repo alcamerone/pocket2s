@@ -25,7 +25,7 @@ export default class ControlBar extends Component {
 		if (
 			this.props.table &&
 			this.props.table.Status === TABLE_STATUS_DONE &&
-			!prevProps.table.Status === TABLE_STATUS_DONE
+			prevProps.table.Status !== TABLE_STATUS_DONE
 		) {
 			this.setState({ ready: false });
 		}
@@ -65,7 +65,10 @@ export default class ControlBar extends Component {
 				</div>
 			);
 		}
-		if (this.state.ready && !this.props.table) {
+		if (
+			this.state.ready &&
+			(!this.props.table || this.props.table.Status === TABLE_STATUS_DONE)
+		) {
 			return (
 				<div
 					style={{
