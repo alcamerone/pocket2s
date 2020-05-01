@@ -95,7 +95,9 @@ func init() {
 		cancelSelfDestructCh: make(chan struct{}),
 	}
 	router = web.New(Context{})
-	router.Post("/create/:roomId", handleCreateRoom).
+	router.
+		Get("/check/:roomId", handleRoomCheck).
+		Post("/create/:roomId", handleCreateRoom).
 		Get("/connect/:roomId/:playerId", handleConnect)
 }
 
@@ -117,6 +119,10 @@ func main() {
 			}),
 		}
 
+		go func() {
+			log.Printf("error in HTTP upgrade server: %s", httpSrv.ListenAndServe())
+		}()
+
 		tlsConfig := &tls.Config{
 			// Causes servers to use Go's default ciphersuite preferences,
 			// which are tuned to avoid attacks. Does nothing on clients.
@@ -136,8 +142,7 @@ func main() {
 			Handler:      router,
 		}
 
-		srv.
-			log.Println("starting HTTPS server")
+		log.Println("starting HTTPS server")
 		err = srv.ListenAndServeTLS(
 			"/etc/letsencrypt/live/api.pocket2s.com/fullchain.pem",
 			"/etc/letsencrypt/live/api.pocket2s.com/privkey.pem")
@@ -145,6 +150,17 @@ func main() {
 	if err != nil {
 		log.Fatal("error in main loop: " + err.Error())
 	}
+}
+
+func handleRoomCheck(ctx *Context, rw web.ResponseWriter, req *web.Request) {
+	roomId := req.PathParams["roomId"]
+	roomLock.RLock()
+	defer roomLock.RUnlock()
+	if room := roomMap[roomId]; room != nil {
+		rw.WriteHeader(http.StatusConflict)
+		return
+	}
+	rw.WriteHeader(http.StatusOK)
 }
 
 func handleCreateRoom(ctx *Context, rw web.ResponseWriter, req *web.Request) {
