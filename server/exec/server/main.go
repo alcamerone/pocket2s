@@ -19,10 +19,12 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +42,7 @@ const (
 	DEFAULT_BUY_IN      = 2000
 	DEFAULT_BIG_BLIND   = 20
 	DEFAULT_SMALL_BLIND = 10
+	ENV_LOCAL           = "local"
 )
 
 type playerMap struct {
