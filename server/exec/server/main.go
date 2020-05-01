@@ -48,9 +48,10 @@ type playerMap struct {
 }
 
 type room struct {
-	id        string
-	playerMap playerMap
-	gameTable *table.Table
+	id                   string
+	playerMap            playerMap
+	gameTable            *table.Table
+	cancelSelfDestructCh chan struct{}
 }
 
 var (
@@ -88,6 +89,7 @@ func init() {
 		playerMap: playerMap{
 			players: make(map[string]*types.Player, MAX_PLAYERS),
 		},
+		cancelSelfDestructCh: make(chan struct{}),
 	}
 	router = web.New(Context{})
 	router.Post("/create/:roomId", handleCreateRoom).
@@ -95,8 +97,48 @@ func init() {
 }
 
 func main() {
-	log.Println("starting server on port 2222")
-	err := http.ListenAndServe(":2222", router)
+	var err error
+	if os.Getenv("ENVIRONMENT") == ENV_LOCAL {
+		log.Println("starting server on port 2222")
+		err = http.ListenAndServe(":2222", router)
+	} else {
+		// redirect HTTP to HTTPS
+		httpSrv := &http.Server{
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 5 * time.Second,
+			IdleTimeout:  5 * time.Second,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				w.Header().Set("Connection", "close")
+				url := "https://" + req.Host + req.URL.String()
+				http.Redirect(w, req, url, http.StatusMovedPermanently)
+			}),
+		}
+
+		tlsConfig := &tls.Config{
+			// Causes servers to use Go's default ciphersuite preferences,
+			// which are tuned to avoid attacks. Does nothing on clients.
+			PreferServerCipherSuites: true,
+			// Only use curves which have assembly implementations
+			CurvePreferences: []tls.CurveID{
+				tls.CurveP256,
+				tls.X25519, // Go 1.8 only
+			},
+		}
+
+		srv := &http.Server{
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  120 * time.Second,
+			TLSConfig:    tlsConfig,
+			Handler:      router,
+		}
+
+		srv.
+			log.Println("starting HTTPS server")
+		err = srv.ListenAndServeTLS(
+			"/etc/letsencrypt/live/api.pocket2s.com/fullchain.pem",
+			"/etc/letsencrypt/live/api.pocket2s.com/privkey.pem")
+	}
 	if err != nil {
 		log.Fatal("error in main loop: " + err.Error())
 	}
@@ -120,6 +162,7 @@ func handleCreateRoom(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 		playerMap: playerMap{
 			players: make(map[string]*types.Player, MAX_PLAYERS),
 		},
+		cancelSelfDestructCh: make(chan struct{}),
 	}
 	rw.WriteHeader(http.StatusCreated)
 }
@@ -134,6 +177,7 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 		rw.WriteHeader(http.StatusNotFound)
 		return
 	}
+	r.cancelSelfDestruct()
 
 	playerId := req.PathParams["playerId"]
 
@@ -484,6 +528,39 @@ func (r *room) handlePlayerError(player *types.Player, err error) {
 				player)
 		}
 	}
+	go r.closeIfEmpty()
+}
+
+func (r *room) closeIfEmpty() {
+	r.playerMap.RLock()
+	defer r.playerMap.RUnlock()
+	for _, p := range r.playerMap.players {
+		if p.Conn != nil {
+			return
+		}
+	}
+	select {
+	case <-r.cancelSelfDestructCh:
+		return
+	case <-time.After(30 * time.Second):
+	}
+	// For dev just reset the room
+	// For prod, destroy it
+	// TODO remove
+	roomLock.Lock()
+	defer roomLock.Unlock()
+	log.Printf("room %s destroyed due to inactivity")
+	if r.id == "pocket2s" {
+		r.gameTable = nil
+		r.playerMap.players = make(map[string]*types.Player, MAX_PLAYERS)
+		return
+	}
+	delete(roomMap, r.id)
+}
+
+func (r *room) cancelSelfDestruct() {
+	close(r.cancelSelfDestructCh)
+	r.cancelSelfDestructCh = make(chan struct{})
 }
 
 func getResult(tableState table.State) string {
