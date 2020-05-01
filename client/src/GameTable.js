@@ -1,11 +1,13 @@
 import React, { Component, Fragment } from "react";
 import Player from "./Player.js";
 import ControlBar from "./ControlBar.js";
+import config from "./config.js";
 
 const MSG_TYPE_HELLO = 1;
 const MSG_TYPE_TABLE_STATE = 5;
-const MSG_TYPE_PLAYER_CONNECTED = 8;
-const MSG_TYPE_PLAYER_DISCONNECTED = 9;
+// TODO
+// const MSG_TYPE_PLAYER_CONNECTED = 8;
+// const MSG_TYPE_PLAYER_DISCONNECTED = 9;
 
 export default class GameTable extends Component {
 	constructor(props) {
@@ -26,7 +28,7 @@ export default class GameTable extends Component {
 		const tableId = pathname.substr(1, pathname.lastIndexOf("/") - 1);
 		const playerId = pathname.substr(pathname.lastIndexOf("/") + 1);
 		// TODO config
-		const conn = new WebSocket(`ws://localhost:2222/connect/${tableId}/${playerId}`);
+		const conn = new WebSocket(`${config.hostUrl}/connect/${tableId}/${playerId}`);
 		conn.onmessage = this.processMessage;
 		conn.onerror = (e) => {
 			console.log("Error while connecting", e);
