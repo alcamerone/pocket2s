@@ -1,0 +1,94 @@
+.App {
+  text-align: center;
+  min-height: 100vh;
+  padding-top: 5%;
+}
+
+.App-logo {
+  height: 10vmin;
+  pointer-events: none;
+}
+
+.divider {
+  border: solid 1px #888888;
+  width: 66%;
+  margin: 20px auto;
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+.input-block {
+  background-color: silver;
+  border: solid 1px #888888;
+  width: 45vw;
+  margin: auto;
+  border-radius: 10px;
+
+  button {
+    height: 40px;
+    display: block;
+    width: 10vw;
+    margin: 10px auto;
+    border-radius: 10px;
+    color: #7f003a;
+    background-color: #dddddd;
+    font-weight: bold;
+    font-family: "Snell Roundhand";
+    font-size: 20px;
+  }
+}
+
+.input-group {
+  text-align: left;
+  margin: 10px 15px;
+  width: 17vw;
+
+  label {
+    display: block;
+    font-size: 12px;
+    margin-bottom: 3px;
+  }
+
+  input {
+    border: solid 1px #888888;
+    width: 100%;
+    border-radius: 4px;
+    font-size: 20px;
+    padding: 10px 10px;
+  }
+
+  &.half-width {
+    width: 8.5vw;
+    display: inline-block;
+
+    input {
+      width: 50%;
+    }
+  }
+}
+
+h3 {
+  font-weight: normal;
+}
+
+.smaller {
+  .input-group {
+    margin: 10px auto;
+    input {
+      font-size: 10px;
+    }
+  }
+}
