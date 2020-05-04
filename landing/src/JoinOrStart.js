@@ -157,7 +157,7 @@ export default class JoinOrStart extends Component {
 					</button>
 				</div>
 				<div className="divider" />
-				<a
+				<span
 					onClick={() =>
 						this.setState({
 							showCreateGameDiv: !this.state.showCreateGameDiv
@@ -165,7 +165,7 @@ export default class JoinOrStart extends Component {
 					}
 				>
 					Or, click here to start a room...
-				</a>
+				</span>
 				{this.state.showCreateGameDiv && (
 					<Fragment>
 						<div className="input-block smaller">
