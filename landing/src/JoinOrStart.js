@@ -1,6 +1,5 @@
 import React, { Component, Fragment } from "react";
 import config from "./config.js";
-import classNames from "classnames";
 
 const nameRe = /[A-Za-z0-9-_]*/;
 const valueRe = /\d+(?:\.\d{0,2})/;
