@@ -20,7 +20,9 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
@@ -42,6 +44,7 @@ const (
 	DEFAULT_BUY_IN      = 2000
 	DEFAULT_BIG_BLIND   = 20
 	DEFAULT_SMALL_BLIND = 10
+	DEFAULT_ANTE        = 0
 	ENV_LOCAL           = "local"
 )
 
@@ -52,9 +55,17 @@ type playerMap struct {
 
 type room struct {
 	id                   string
+	opts                 roomOpts
 	playerMap            playerMap
 	gameTable            *table.Table
 	cancelSelfDestructCh chan struct{}
+}
+
+type roomOpts struct {
+	BuyIn      int
+	BigBlind   int
+	SmallBlind int
+	Ante       int
 }
 
 var (
@@ -93,9 +104,16 @@ func init() {
 			players: make(map[string]*types.Player, MAX_PLAYERS),
 		},
 		cancelSelfDestructCh: make(chan struct{}),
+		opts: roomOpts{
+			BuyIn:      DEFAULT_BUY_IN,
+			BigBlind:   DEFAULT_BIG_BLIND,
+			SmallBlind: DEFAULT_SMALL_BLIND,
+			Ante:       DEFAULT_ANTE,
+		},
 	}
 	router = web.New(Context{})
 	router.
+		Middleware(setHeaders).
 		Get("/check/:roomId", handleRoomCheck).
 		Post("/create/:roomId", handleCreateRoom).
 		Get("/connect/:roomId/:playerId", handleConnect)
@@ -152,6 +170,18 @@ func main() {
 	}
 }
 
+func setHeaders(ctx *Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
+	reqOrigin := req.Request.Header.Get("Origin")
+	if reqOrigin == "" {
+		log.Printf("received request with no origin header from %s", req.Request.RemoteAddr)
+		rw.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	rw.Header().Add("Access-Control-Allow-Origin", reqOrigin)
+	rw.Header().Add("Access-Control-Allow-Headers", "Content-Type")
+	next(rw, req)
+}
+
 func handleRoomCheck(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 	roomId := req.PathParams["roomId"]
 	roomLock.RLock()
@@ -174,6 +204,20 @@ func handleCreateRoom(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 	}
 	roomLock.RUnlock()
 
+	var opts roomOpts
+	reqBody, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		log.Printf("Error reading request body: %s", err.Error())
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	err = json.Unmarshal(reqBody, &opts)
+	if err != nil {
+		log.Printf("Error unmarshalling request body: %s", err.Error())
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	roomLock.Lock()
 	defer roomLock.Unlock()
 	roomMap[roomId] = &room{
@@ -182,7 +226,9 @@ func handleCreateRoom(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 			players: make(map[string]*types.Player, MAX_PLAYERS),
 		},
 		cancelSelfDestructCh: make(chan struct{}),
+		opts:                 opts,
 	}
+	log.Printf("created room %s", roomId)
 	rw.WriteHeader(http.StatusCreated)
 }
 
@@ -204,19 +250,19 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 	tableFull := len(r.playerMap.players) > MAX_PLAYERS
 	existingPlayer, playerExists := r.playerMap.players[playerId]
 	if playerExists && existingPlayer.Conn != nil {
-		log.Printf("error: a player named %s is already at the table")
+		log.Printf("error: a player named %s is already at the table", playerId)
 		rw.WriteHeader(http.StatusConflict)
 		return
 	}
 	if tableFull {
-		log.Printf("error: the table already has the maximum number of players")
+		log.Println("error: the table already has the maximum number of players")
 		rw.WriteHeader(http.StatusLocked)
 		return
 	}
 
 	conn, err := wsUpgrader.Upgrade(rw, req.Request, nil)
 	if err != nil {
-		log.Println("error establishing connection: %s", err.Error())
+		log.Printf("error establishing connection: %s", err.Error())
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -310,12 +356,12 @@ func (r *room) handleMessageFromPlayer(
 				r.gameTable = table.New(
 					dealer,
 					table.Options{
-						Buyin:   DEFAULT_BUY_IN,
+						Buyin:   r.opts.BuyIn,
 						Variant: table.TexasHoldem,
 						Stakes: table.Stakes{
-							BigBlind:   DEFAULT_BIG_BLIND,
-							SmallBlind: DEFAULT_SMALL_BLIND,
-							Ante:       0,
+							BigBlind:   r.opts.BigBlind,
+							SmallBlind: r.opts.SmallBlind,
+							Ante:       r.opts.Ante,
 						},
 						Limit:   table.NoLimit,
 						OneShot: true,
@@ -568,7 +614,7 @@ func (r *room) closeIfEmpty() {
 	// TODO remove
 	roomLock.Lock()
 	defer roomLock.Unlock()
-	log.Printf("room %s destroyed due to inactivity")
+	log.Printf("room %s destroyed due to inactivity", r.id)
 	if r.id == "pocket2s" {
 		r.gameTable = nil
 		r.playerMap.players = make(map[string]*types.Player, MAX_PLAYERS)

@@ -9,6 +9,11 @@ const MSG_TYPE_TABLE_STATE = 5;
 // const MSG_TYPE_PLAYER_CONNECTED = 8;
 // const MSG_TYPE_PLAYER_DISCONNECTED = 9;
 
+const intToDollars = (i) => {
+	const dollars = i / 100;
+	return `$${dollars.toFixed(2)}`;
+};
+
 export default class GameTable extends Component {
 	constructor(props) {
 		super(props);
@@ -179,7 +184,7 @@ export default class GameTable extends Component {
 								<p>
 									{this.state.result
 										? this.state.result
-										: "POT: " + this.state.table.Pot}
+										: "POT: " + intToDollars(this.state.table.Pot)}
 								</p>
 							</td>
 							<td

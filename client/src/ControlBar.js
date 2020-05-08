@@ -12,6 +12,11 @@ const ACTION_BET = 3;
 const ACTION_RAISE = 4;
 const ACTION_ALLIN = 5;
 
+const intToDollars = (i) => {
+	const dollars = i / 100;
+	return `$${dollars.toFixed(2)}`;
+};
+
 export default class ControlBar extends Component {
 	constructor(props) {
 		super(props);
@@ -179,7 +184,7 @@ export default class ControlBar extends Component {
 							this.setState({ bet });
 						}}
 					/>
-					<input type="text" value={this.state.bet} disabled />
+					<input type="text" value={intToDollars(this.state.bet)} disabled />
 				</div>
 				<div
 					style={{ height: "100%", width: "25%", display: "inline-block" }}

@@ -1,5 +1,10 @@
 import React from "react";
 
+const intToDollars = (i) => {
+	const dollars = i / 100;
+	return `$${dollars.toFixed(2)}`;
+};
+
 export default function Player(props) {
 	if (!props.table.Seats || props.table.Seats.length < props.seat + 1) {
 		return null;
@@ -19,8 +24,8 @@ export default function Player(props) {
 						*
 					</div>
 				)}
-			<p>IN POT: {props.table.Seats[props.seat].ChipsInPot}</p>
-			<p>STACK: {props.table.Seats[props.seat].Chips}</p>
+			<p>IN POT: {intToDollars(props.table.Seats[props.seat].ChipsInPot)}</p>
+			<p>STACK: {intToDollars(props.table.Seats[props.seat].Chips)}</p>
 			<p>{props.table.Seats[props.seat].ID}</p>
 			<p>
 				{props.player.ID === props.table.Seats[props.seat].ID
