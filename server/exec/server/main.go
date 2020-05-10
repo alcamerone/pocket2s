@@ -114,6 +114,7 @@ func init() {
 	router = web.New(Context{})
 	router.
 		Middleware(setHeaders).
+		Get("/healthcheck", handleHealthcheck).
 		Get("/check/:roomId", handleRoomCheck).
 		Post("/create/:roomId", handleCreateRoom).
 		Get("/connect/:roomId/:playerId", handleConnect)
@@ -180,6 +181,11 @@ func setHeaders(ctx *Context, rw web.ResponseWriter, req *web.Request, next web.
 	rw.Header().Add("Access-Control-Allow-Origin", reqOrigin)
 	rw.Header().Add("Access-Control-Allow-Headers", "Content-Type")
 	next(rw, req)
+}
+
+func handleHealthcheck(ctx *Context, rw web.ResponseWriter, req *web.Request) {
+	// TODO for now just return 200 to say the server is alive
+	rw.WriteHeader(http.StatusOK)
 }
 
 func handleRoomCheck(ctx *Context, rw web.ResponseWriter, req *web.Request) {
