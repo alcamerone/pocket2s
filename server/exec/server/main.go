@@ -112,12 +112,14 @@ func init() {
 		},
 	}
 	router = web.New(Context{})
-	router.
-		Get("/healthcheck", handleHealthcheck).
+	router.Subrouter(Context{}, "").
 		Middleware(setHeaders).
 		Get("/check/:roomId", handleRoomCheck).
 		Post("/create/:roomId", handleCreateRoom).
 		Get("/connect/:roomId/:playerId", handleConnect)
+
+	router.Subrouter(Context{}, "/healthcheck").
+		Get("/", handleHealthcheck)
 }
 
 func main() {
