@@ -2,6 +2,8 @@ import React, { Component, Fragment } from "react";
 import Player from "./Player.js";
 import ControlBar from "./ControlBar.js";
 import config from "./config.js";
+import Deck from "./react-poker/Deck.js";
+import "./react-poker/Card.scss";
 
 const MSG_TYPE_HELLO = 1;
 const MSG_TYPE_TABLE_STATE = 5;
@@ -180,12 +182,28 @@ export default class GameTable extends Component {
 									backgroundColor: "darkgreen"
 								}}
 							>
-								<p>{this.state.table.Cards}</p>
-								<p>
+								<div
+									className="deck-container"
+									style={{
+										position: "relative",
+										height: "40px",
+										width: "93%",
+										margin: "auto",
+										marginBottom: "70px"
+									}}
+								>
+									<Deck
+										board={this.state.table.Cards}
+										boardXoffset={80}
+										boardYoffset={30}
+										size={60}
+									/>
+								</div>
+								<div>
 									{this.state.result
 										? this.state.result
 										: "POT: " + intToDollars(this.state.table.Pot)}
-								</p>
+								</div>
 							</td>
 							<td
 								style={{
