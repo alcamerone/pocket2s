@@ -105,7 +105,8 @@ const cardImgMap = {
   "A♣": CA,
   "A♦": DA,
   "A♥": HA,
-  "A♠": SA
+  "A♠": SA,
+  Xx: back // TODO fix bug on player leaving at end of round
 };
 
 class Card extends PureComponent {
@@ -115,6 +116,10 @@ class Card extends PureComponent {
     }
 
     if (nextProps.size !== this.props.size) {
+      return true;
+    }
+
+    if (nextProps.card !== this.props.card) {
       return true;
     }
 

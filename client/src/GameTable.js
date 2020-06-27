@@ -193,7 +193,11 @@ export default class GameTable extends Component {
 									}}
 								>
 									<Deck
-										board={this.state.table.Cards}
+										board={
+											this.state.table.Cards
+												? this.state.table.Cards
+												: []
+										}
 										boardXoffset={80}
 										boardYoffset={30}
 										size={60}

@@ -1,4 +1,7 @@
 import React from "react";
+import Card from "./react-poker/Card.js";
+
+const TABLE_STATUS_DONE = 2;
 
 const intToDollars = (i) => {
 	const dollars = i / 100;
@@ -9,6 +12,14 @@ export default function Player(props) {
 	if (!props.table.Seats || props.table.Seats.length < props.seat + 1) {
 		return null;
 	}
+	const isHero = props.player.ID === props.table.Seats[props.seat].ID;
+	const cards = isHero
+		? props.player.Cards
+		: props.table.Seats[props.seat].Cards
+		? props.table.Seats[props.seat].Cards
+		: ["Xx", "Xx"];
+	const roundOver = props.table.Status === TABLE_STATUS_DONE;
+
 	return (
 		<div style={{ height: "100%", width: "100%", position: "relative" }}>
 			{props.table.Seats &&
@@ -24,14 +35,40 @@ export default function Player(props) {
 						*
 					</div>
 				)}
-			<p>IN POT: {intToDollars(props.table.Seats[props.seat].ChipsInPot)}</p>
-			<p>STACK: {intToDollars(props.table.Seats[props.seat].Chips)}</p>
-			<p>{props.table.Seats[props.seat].ID}</p>
-			<p>
-				{props.player.ID === props.table.Seats[props.seat].ID
-					? props.player.Cards
-					: props.table.Seats.Cards}
-			</p>
+			<div
+				className="player-info"
+				style={{ marginTop: "5px", marginBottom: "10px" }}
+			>
+				<div style={{ marginBottom: "5px" }}>
+					IN POT: {intToDollars(props.table.Seats[props.seat].ChipsInPot)}
+				</div>
+				<div style={{ marginBottom: "5px" }}>
+					STACK: {intToDollars(props.table.Seats[props.seat].Chips)}
+				</div>
+				<div style={{ marginBottom: "5px" }}>
+					{props.table.Seats[props.seat].ID}
+				</div>
+			</div>
+			<div>
+				{cards &&
+					cards.map((card) => {
+						return (
+							<div
+								style={{
+									height: "60px",
+									width: "45px",
+									display: "inline-block"
+								}}
+							>
+								<Card
+									card={card}
+									faceDown={!isHero && !roundOver}
+									rotationY={0}
+								/>
+							</div>
+						);
+					})}
+			</div>
 		</div>
 	);
 }

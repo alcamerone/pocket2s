@@ -81,7 +81,7 @@ DeckContainer.defaultProps = {
   size: 200,
   boardXoffset: 475,
   boardYoffset: 300,
-  flipOnHover: true
+  flipOnHover: false
 };
 
 export default DeckContainer;

@@ -135,7 +135,7 @@ class CardContainer extends Component {
           flipOnHover ? () => (board.includes(cardValue) ? this.flipCard() : null) : null
         }
       >
-        <Motion defaultStyle={{ x: 1800, y: 1000 }} style={sprungRange}>
+        <Motion defaultStyle={{ x: 0, y: 0 }} style={sprungRange}>
           {(
             { x, y } // interpolated x, y values
           ) => (
