@@ -493,7 +493,11 @@ func obfuscateTableState(tableState table.State) table.State {
 		if tableState.Status != table.Done {
 			seats[i].ChipsInPot = player.ChipsInPot
 		}
-		if tableState.Status == table.Done &&
+		if player.Folded || player.SittingOut {
+			// Send an empty array to signal to the front-end
+			// that this player has no cards
+			seats[i].Cards = make([]hand.Card, 0)
+		} else if tableState.Status == table.Done &&
 			len(tableState.Result.Contestants) > 1 &&
 			playerIsContesting(player.ID, tableState) {
 			seats[i].Cards = player.Cards

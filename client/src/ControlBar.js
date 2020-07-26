@@ -3,6 +3,7 @@ import React, { Component } from "react";
 const TABLE_STATUS_DONE = 2;
 
 const MSG_TYPE_READY = 2;
+const MSG_TYPE_BUY_IN = 4;
 const MSG_TYPE_PLAYER_ACTION = 6;
 
 const ACTION_FOLD = 0;
@@ -47,6 +48,33 @@ export default class ControlBar extends Component {
 
 		if (!this.props.connected) {
 			return null;
+		}
+		if (!this.state.ready &&
+			this.props.table &&
+			this.props.player &&
+			this.props.player.Chips < 1 &&
+			(this.props.player.ChipsInPot < 1 ||
+				this.props.table.Status === TABLE_STATUS_DONE)) {
+			return (
+				<div
+					style={{
+						height: "60px",
+						width: "960px",
+						backgroundColor: "#444444",
+						margin: "auto"
+					}}
+				>
+					<button
+						style={{ height: "33%", width: "19%", margin: "auto" }}
+						onClick={() => {
+							this.sendAction({ Type: MSG_TYPE_BUY_IN }, this.props.conn);
+							this.setState({ ready: true });
+						}}
+					>
+						{`BUY IN ($${intToDollars(this.props.table.Options.Buyin)})`}
+					</button>
+				</div>
+			);
 		}
 		if (!this.state.ready) {
 			return (

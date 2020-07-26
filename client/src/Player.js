@@ -9,7 +9,7 @@ const intToDollars = (i) => {
 };
 
 export default function Player(props) {
-	if (!props.table.Seats || props.table.Seats.length < props.seat + 1) {
+	if (!props.table || !props.table.Seats || props.table.Seats.length < props.seat + 1) {
 		return null;
 	}
 	const isHero = props.player.ID === props.table.Seats[props.seat].ID;
