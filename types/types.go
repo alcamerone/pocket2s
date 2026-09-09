@@ -20,8 +20,10 @@ package types
 
 import (
 	"github.com/alcamerone/joker/table"
-	"github.com/gorilla/websocket"
+	"github.com/alcamerone/pocket2s/cmap"
 )
+
+const MAX_PLAYERS = 6
 
 type MessageType int
 
@@ -40,7 +42,6 @@ const (
 
 type Player struct {
 	Id         string
-	Conn       *websocket.Conn
 	TablePos   int
 	Ready      bool
 	SittingOut bool
@@ -64,4 +65,62 @@ type ToPlayerMessage struct {
 type PlayerAction struct {
 	table.Action
 	PlayerId string
+}
+
+type Room struct {
+	Id                   string
+	Opts                 RoomOpts
+	PlayerMap            *cmap.ConcurrentMap[string, *Player]
+	GameTable            *table.Table
+	cancelSelfDestructCh chan struct{}
+}
+
+func (r *Room) GetPlayerIds() []string {
+	playerIds := make([]string, r.PlayerMap.Len())
+	for player := range r.PlayerMap.Values() {
+		playerIds[player.TablePos] = player.Id
+	}
+	return playerIds
+}
+
+func (r *Room) PlayersAreReady() bool {
+	if r.PlayerMap.Len() < 2 {
+		return false
+	}
+	var nSittingOut int
+	for _, player := range r.PlayerMap.All() {
+		if !player.Ready && !player.SittingOut && !player.Broke {
+			return false
+		}
+		if player.SittingOut || player.Broke {
+			nSittingOut++
+		}
+	}
+	if r.PlayerMap.Len()-nSittingOut < 2 {
+		return false
+	}
+	return true
+}
+
+func (r *Room) ResetPlayersReady() {
+	for p := range r.PlayerMap.Values() {
+		p.Ready = false
+	}
+}
+
+func (r *Room) GetPlayersSittingOut() []string {
+	sittingOut := make([]string, 0)
+	for p := range r.PlayerMap.Values() {
+		if p.SittingOut {
+			sittingOut = append(sittingOut, p.Id)
+		}
+	}
+	return sittingOut
+}
+
+type RoomOpts struct {
+	BuyIn      int
+	BigBlind   int
+	SmallBlind int
+	Ante       int
 }
