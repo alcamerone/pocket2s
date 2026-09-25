@@ -31,7 +31,7 @@ import (
 	"github.com/alcamerone/pocket2s/cmap"
 	"github.com/alcamerone/pocket2s/db"
 	pocket2shttp "github.com/alcamerone/pocket2s/server/http"
-	"github.com/alcamerone/pocket2s/server/http/rooms"
+	httpRooms "github.com/alcamerone/pocket2s/server/http/rooms"
 	"github.com/alcamerone/pocket2s/types"
 	"github.com/gocraft/web"
 )
@@ -76,7 +76,7 @@ func main() {
 		ctx.Rooms = roomStore
 		next(rw, req)
 	})
-	rooms.AddRoomRoutes(router)
+	httpRooms.AddRoomRoutes(router)
 	router.Middleware(func(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
 		// If the call was to connect,
 		// ensure that the room in question is not erroneously cleaned up

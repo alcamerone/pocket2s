@@ -136,9 +136,9 @@ func mainLoop() error {
 			}
 			fmt.Printf(
 				"Dealer: %s\nSmall Blind: %s\nBig Blind: %s\n",
-				msg.TableState.Dealer.ID,
-				msg.TableState.SmallBlind.ID,
-				msg.TableState.BigBlind.ID)
+				msg.TableState.DealerId,
+				msg.TableState.SmallBlindId,
+				msg.TableState.BigBlindId)
 			fmt.Printf("Cards: %v, Pot: %d\n", msg.TableState.Cards, msg.TableState.Pot)
 			if !msg.PlayerState.SittingOut {
 				fmt.Printf(

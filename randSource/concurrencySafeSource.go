@@ -19,7 +19,7 @@
 package randSource
 
 import (
-	"math/rand"
+	"math/rand/v2"
 	"sync"
 )
 
@@ -28,18 +28,12 @@ type ConcurrencySafeSource struct {
 	m sync.Mutex
 }
 
-func NewConcurrencySafeSource(seed int64) *ConcurrencySafeSource {
-	return &ConcurrencySafeSource{r: rand.New(rand.NewSource(seed))}
+func NewConcurrencySafeSource(seed1, seed2 uint64) *ConcurrencySafeSource {
+	return &ConcurrencySafeSource{r: rand.New(rand.NewPCG(seed1, seed2))}
 }
 
-func (s *ConcurrencySafeSource) Int63() int64 {
+func (s *ConcurrencySafeSource) Uint64() uint64 {
 	s.m.Lock()
 	defer s.m.Unlock()
-	return s.r.Int63()
-}
-
-func (s *ConcurrencySafeSource) Seed(seed int64) {
-	s.m.Lock()
-	defer s.m.Unlock()
-	s.r.Seed(seed)
+	return s.r.Uint64()
 }
