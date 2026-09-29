@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/alcamerone/joker/table"
-	"github.com/alcamerone/pocket2s/types"
+	"github.com/alcamerone/pocket2s/messaging"
 	"github.com/gorilla/websocket"
 )
 
@@ -103,23 +103,24 @@ func main() {
 
 func mainLoop() error {
 	var (
-		msg types.ToPlayerMessage
+		msg messaging.ToPlayerMessage
 		err error
 	)
 	for {
-		msg = types.ToPlayerMessage{}
+		msg = messaging.ToPlayerMessage{}
 		err = conn.ReadJSON(&msg)
 		if err != nil {
 			return errors.New("error reading message from server: " + err.Error())
 		}
 		switch msg.Type {
-		case types.MessageTypeHello:
+		case messaging.MessageTypeHello:
 			fmt.Println("Connection established to Pocket2s server!")
 			fmt.Println("The game will start when there are two or more players and everyone has marked themselves ready.")
 			fmt.Println("Hit Enter when you're ready to start, or type SIT OUT to sit the first round out.")
 			awaitPlayerReady(conn, false)
 			fmt.Println("Okay! Waiting for other players...")
-		case types.MessageTypeTableState, types.MessageTypeIllegalAction:
+		case messaging.MessageTypeTableState, messaging.MessageTypeIllegalAction:
+			ts := msg.TableState
 			if msg.Result != "" {
 				fmt.Println(msg.Result)
 				if msg.PlayerState.Chips < 1 {
@@ -131,15 +132,15 @@ func mainLoop() error {
 				fmt.Println("Okay! Waiting for other players...")
 				continue
 			}
-			if msg.Type == types.MessageTypeIllegalAction {
+			if msg.Type == messaging.MessageTypeIllegalAction {
 				fmt.Println("Sorry, that action's not allowed.")
 			}
 			fmt.Printf(
 				"Dealer: %s\nSmall Blind: %s\nBig Blind: %s\n",
-				msg.TableState.DealerId,
-				msg.TableState.SmallBlindId,
-				msg.TableState.BigBlindId)
-			fmt.Printf("Cards: %v, Pot: %d\n", msg.TableState.Cards, msg.TableState.Pot)
+				ts.Seats[ts.DealerIdx].ID,
+				ts.Seats[ts.SmallBlindIdx].ID,
+				ts.Seats[ts.BigBlindIdx].ID)
+			fmt.Printf("Cards: %v, Pot: %d\n", ts.Cards, ts.Pot)
 			if !msg.PlayerState.SittingOut {
 				fmt.Printf(
 					"Your cards: %v. Your chips: %d, in pot %d\n",
@@ -147,13 +148,13 @@ func mainLoop() error {
 					msg.PlayerState.Chips,
 					msg.PlayerState.ChipsInPot)
 			}
-			if msg.TableState.Active.ID != playerId {
-				fmt.Printf("It is %s's turn...\n", msg.TableState.Active.ID)
+			if ts.Seats[ts.ActiveIdx].ID != playerId {
+				fmt.Printf("It is %s's turn...\n", ts.Seats[ts.ActiveIdx].ID)
 			} else {
-				action := parseTableAction(msg.TableState)
+				action := parseTableAction(ts)
 				err := conn.WriteJSON(
-					types.FromPlayerMessage{
-						Type:   types.MessageTypePlayerAction,
+					messaging.FromPlayerMessage{
+						Type:   messaging.MessageTypePlayerAction,
 						Action: action,
 					},
 				)
@@ -162,11 +163,11 @@ func mainLoop() error {
 					log.Printf("error sending player action to server: %s", err.Error())
 				}
 			}
-		case types.MessageTypePlayerAction:
+		case messaging.MessageTypePlayerAction:
 			fmt.Println(stringifyPlayerAction(msg.PlayerAction))
-		case types.MessageTypePlayerConnected:
+		case messaging.MessageTypePlayerConnected:
 			fmt.Printf("Player %s has entered the game!\n", msg.PlayerId)
-		case types.MessageTypePlayerDisconnected:
+		case messaging.MessageTypePlayerDisconnected:
 			fmt.Printf(
 				"Lost connection to player %s, they will sit out until they return.\n",
 				msg.PlayerId)
@@ -183,12 +184,12 @@ func awaitPlayerReady(conn *websocket.Conn, playerIsBroke bool) {
 		input, err = getInput(true)
 		if err == nil {
 			if input == SIT_OUT {
-				err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeSitOut})
+				err = conn.WriteJSON(messaging.FromPlayerMessage{Type: messaging.MessageTypeSitOut})
 			} else {
 				if playerIsBroke {
-					err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeBuyIn})
+					err = conn.WriteJSON(messaging.FromPlayerMessage{Type: messaging.MessageTypeBuyIn})
 				} else {
-					err = conn.WriteJSON(types.FromPlayerMessage{Type: types.MessageTypeReady})
+					err = conn.WriteJSON(messaging.FromPlayerMessage{Type: messaging.MessageTypeReady})
 				}
 			}
 			if err != nil {
@@ -256,7 +257,7 @@ func validActions(tableState table.State) []string {
 	if tableState.Owed == 0 {
 		return []string{ActionFold, ActionCheck, ActionBet, ActionAllIn}
 	}
-	if tableState.Owed > tableState.Active.Chips {
+	if tableState.Owed > tableState.Seats[tableState.ActiveIdx].Chips {
 		return []string{ActionFold, ActionCall}
 	}
 	fmt.Printf("Call cost is %d.\n", tableState.Owed)
@@ -277,7 +278,7 @@ func parseBet(args []string) (int, error) {
 	return int(amt), nil // TODO fix unsafe conversion
 }
 
-func stringifyPlayerAction(action types.PlayerAction) string {
+func stringifyPlayerAction(action messaging.PlayerAction) string {
 	switch action.Type {
 	case table.Fold:
 		return fmt.Sprintf("%s folds.", action.PlayerId)

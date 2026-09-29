@@ -42,6 +42,10 @@ func NewInMemoryMessenger() *InMemoryMessenger {
 	}
 }
 
+func (m *InMemoryMessenger) Connections() map[string]*websocket.Conn {
+	return m.conns
+}
+
 func (m *InMemoryMessenger) sendMessageTo(
 	ctx context.Context,
 	connId string,

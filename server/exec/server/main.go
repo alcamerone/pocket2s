@@ -28,11 +28,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alcamerone/pocket2s/cmap"
 	"github.com/alcamerone/pocket2s/db"
+	"github.com/alcamerone/pocket2s/messaging"
+	"github.com/alcamerone/pocket2s/room"
 	pocket2shttp "github.com/alcamerone/pocket2s/server/http"
 	httpRooms "github.com/alcamerone/pocket2s/server/http/rooms"
-	"github.com/alcamerone/pocket2s/types"
 	"github.com/gocraft/web"
 )
 
@@ -48,7 +48,7 @@ const (
 var (
 	router                *web.Router
 	roomStore             = db.NewInMemoryRoomStore()
-	conns                 = db.NewInMemoryConnectionStore()
+	messenger             = messaging.NewInMemoryMessenger()
 	cancelSelfDestructChs = make(map[string]chan struct{})
 )
 
@@ -58,10 +58,10 @@ func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
 	// TODO default room for dev. Remove before prod
-	roomStore.NewRoom(context.Background(), &types.Room{
+	roomStore.NewRoom(context.Background(), &room.Room{
 		Id:        "pocket2s",
-		PlayerMap: cmap.New[string, *types.Player](MAX_PLAYERS),
-		Opts: types.RoomOpts{
+		PlayerMap: make(map[string]room.Player, MAX_PLAYERS),
+		Opts: room.RoomOpts{
 			BuyIn:      DEFAULT_BUY_IN,
 			BigBlind:   DEFAULT_BIG_BLIND,
 			SmallBlind: DEFAULT_SMALL_BLIND,
@@ -71,9 +71,9 @@ func main() {
 	router = web.New(pocket2shttp.Context{}).
 		Get("/healthcheck", handleHealthcheck)
 	router.Middleware(func(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
-		// Inject stores
-		ctx.Connections = conns
+		// Inject dependencies
 		ctx.Rooms = roomStore
+		ctx.Messenger = messenger
 		next(rw, req)
 	})
 	httpRooms.AddRoomRoutes(router)
@@ -101,8 +101,9 @@ func main() {
 			allRooms, _ := roomStore.GetAllRooms(context.Background())
 		roomLoop:
 			for _, r := range allRooms {
-				for p := range r.PlayerMap.Values() {
-					if _, err := conns.GetConnection(fmt.Sprintf("%s-%s", r.Id, p.Id)); err != nil {
+				var ok bool
+				for _, p := range r.PlayerMap {
+					if _, ok = messenger.Connections()[fmt.Sprintf("%s-%s", r.Id, p.Id)]; ok {
 						// This room has an active connection, continue to the next one
 						continue roomLoop
 					}
@@ -117,7 +118,7 @@ func main() {
 				// For prod, destroy it
 				if r.Id == "pocket2s" {
 					r.GameTable = nil
-					r.PlayerMap = cmap.New[string, *types.Player](MAX_PLAYERS)
+					r.PlayerMap = make(map[string]room.Player, MAX_PLAYERS)
 					continue
 				}
 				roomStore.DeleteRoom(context.Background(), r.Id)

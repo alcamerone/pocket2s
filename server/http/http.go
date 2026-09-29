@@ -5,12 +5,13 @@ import (
 	"net/http"
 
 	"github.com/alcamerone/pocket2s/db"
+	"github.com/alcamerone/pocket2s/messaging"
 	"github.com/gocraft/web"
 )
 
 type Context struct {
-	Rooms       db.RoomStore
-	Connections db.ConnectionStore
+	Rooms     db.RoomStore
+	Messenger messaging.Messenger
 }
 
 func SetHeaders(ctx *Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
