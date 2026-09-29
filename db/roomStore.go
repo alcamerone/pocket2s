@@ -102,7 +102,7 @@ func (s *DDBRoomStore) GetRoom(ctx context.Context, id string) (*room.Room, erro
 					),
 				),
 			),
-			state),
+			state.GameTableState),
 	}, nil
 }
 
@@ -117,7 +117,7 @@ func (s *DDBRoomStore) NewRoom(ctx context.Context, r *room.Room) error {
 }
 
 func (s *DDBRoomStore) UpdateRoom(ctx context.Context, r *room.Room) error {
-	ddbItem, err := attributevalue.MarshalMap(r)
+	ddbItem, err := attributevalue.MarshalMap(r.State())
 	if err != nil {
 		return err
 	}

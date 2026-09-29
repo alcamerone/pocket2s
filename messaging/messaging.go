@@ -3,20 +3,33 @@ package messaging
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log"
 	"strings"
 	"time"
 
-	"github.com/alcamerone/joker/table"
-	"github.com/alcamerone/pocket2s/room"
 	"github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi"
+	"github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi/types"
 	"github.com/gorilla/websocket"
 )
 
 type Messenger interface {
-	SendMessageTo(connId string, msg ToPlayerMessage) error
-	HandleSendError()
+	// `sendMessageTo` defines the logic for the actual sending of a message on a
+	// connection.
+	// Note that this method is only used internally to the `messaging` package;
+	// external packages should only use the exposed `SendMessageTo` and `Broadcast`
+	// functions.
+	sendMessageTo(ctx context.Context, connId string, msg ToPlayerMessage) error
+
+	// Depending on the type of Messenger, the error that indicates a connection is broken
+	// may vary.
+	// `isClosedConnectionError` provides an abstraction that lets each Messenger define
+	// this individually.
+	isClosedConnectionError(err error) bool
+
+	// `handleConnectionError` allows each Messenger type to define any actions that
+	// need to be taken to clean up after a broken connection.
+	handleConnectionError(connId string)
 }
 
 type InMemoryMessenger struct {
@@ -29,8 +42,29 @@ func NewInMemoryMessenger() *InMemoryMessenger {
 	}
 }
 
-func (m *InMemoryMessenger) SendMessageTo(connId string, msg ToPlayerMessage) error {
+func (m *InMemoryMessenger) sendMessageTo(
+	ctx context.Context,
+	connId string,
+	msg ToPlayerMessage,
+) error {
 	return m.conns[connId].WriteJSON(msg)
+}
+
+func (m *InMemoryMessenger) handleConnectionError(connId string) {
+	c := m.conns[connId]
+	if c != nil {
+		c.Close()
+	}
+	delete(m.conns, connId)
+}
+
+func (m *InMemoryMessenger) isClosedConnectionError(err error) bool {
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "use of closed network connection") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "unexpected eof") ||
+		strings.Contains(errStr, "going away") ||
+		strings.Contains(errStr, "connection reset by peer")
 }
 
 type LambdaMessenger struct {
@@ -41,7 +75,11 @@ func NewLambdaMessenger(endpoint string) *LambdaMessenger {
 	return &LambdaMessenger{endpoint}
 }
 
-func (m *LambdaMessenger) SendMessageTo(ctx context.Context, connId string, msg any) error {
+func (m *LambdaMessenger) sendMessageTo(
+	ctx context.Context,
+	connId string,
+	msg ToPlayerMessage,
+) error {
 	jMsg, err := json.Marshal(msg)
 	apigmapi := apigatewaymanagementapi.New(apigatewaymanagementapi.Options{
 		BaseEndpoint: &m.endpoint,
@@ -54,32 +92,47 @@ func (m *LambdaMessenger) SendMessageTo(ctx context.Context, connId string, msg 
 	return err
 }
 
-func Broadcast(m Messenger, r *room.Room, msg ToPlayerMessage) {
-	var (
-		err    error
-		connId string
-	)
-
-	for _, p := range r.PlayerMap {
-		if msg.Type == MessageTypeTableState {
-			msg.PlayerState = r.GetPlayerState(p.Id)
-			if msg.PlayerState.Chips == 0 && r.GameTable.State().Status == table.Done {
-				p.Broke = true
-			}
-		}
-		connId = fmt.Sprintf("%s-%s", r.Id, p.Id)
-		err = retrySend(m, connId, msg)
-		if err != nil {
-			log.Printf(
-				"giving up sending state to player %s in room %s due to too many errors",
-				p.Id,
-				r.Id)
-			handlePlayerError(p, err, r)
-		}
-	}
+func (m *LambdaMessenger) isClosedConnectionError(err error) bool {
+	var gone *types.GoneException
+	return errors.As(err, &gone)
 }
 
-func retrySend(
+func (m *LambdaMessenger) handleConnectionError(connId string) {
+	// No-op; LambdaMessenger does not need to manage connections
+}
+
+// `Broadcast` is a convenience method for sending the same message on multiple
+// connections. It returns a list of all connections on which the message failed
+// to be sent to allow the calling package to perform any actions necessary on
+// a connection failure.
+func Broadcast(
+	ctx context.Context,
+	m Messenger,
+	msg ToPlayerMessage,
+	connIds []string,
+) (errConns []string) {
+	var err error
+
+	for _, connId := range connIds {
+		err = SendMessageTo(ctx, m, connId, msg)
+		if err != nil {
+			log.Printf(
+				"giving up sending state to connection %s due to too many errors",
+				connId)
+			m.handleConnectionError(connId)
+			if errConns == nil {
+				errConns = []string{connId}
+			} else {
+				errConns = append(errConns, connId)
+			}
+		}
+	}
+
+	return errConns
+}
+
+func SendMessageTo(
+	ctx context.Context,
 	m Messenger,
 	connId string,
 	msg ToPlayerMessage,
@@ -91,78 +144,19 @@ func retrySend(
 
 	backoff = 100 * time.Millisecond
 	for range 5 {
-		err = m.SendMessageTo(connId, msg)
+		err = m.sendMessageTo(ctx, connId, msg)
 		if err == nil {
 			return nil
 		}
-		if isClosedConnectionError(err.Error()) {
-			c.Close()
-			dErr := cs.DeleteConnection(fmt.Sprintf("%s-%s", rId, pId))
-			if dErr != nil {
-				// We will keep trying this every time we fail to use the broken connection,
-				// so just print the error and continue
-				log.Printf("failed to delete connection %s: %s", cId, dErr)
-			}
+		if m.isClosedConnectionError(err) {
+			m.handleConnectionError(connId)
 			return err
 		}
-		log.Printf("error sending state to player %s: %s", pId, err.Error())
+		log.Printf("error sending message to connection %s: %s", connId, err.Error())
 		time.Sleep(backoff)
 		backoff *= 2
 	}
-	c.Close()
-	dErr := cs.DeleteConnection(fmt.Sprintf("%s-%s", rId, pId))
-	if dErr != nil {
-		// We will keep trying this every time we fail to use the broken connection,
-		// so just print the error and continue
-		log.Printf("failed to delete connection %s: %s", cId, dErr)
-	}
+	// Failed to send message to player after all retries
+	m.handleConnectionError(connId)
 	return err
-}
-
-func isClosedConnectionError(errStr string) bool {
-	return strings.Contains(errStr, "use of closed network connection") ||
-		strings.Contains(errStr, "Broken pipe") ||
-		strings.Contains(errStr, "broken pipe") ||
-		strings.Contains(errStr, "unexpected EOF") ||
-		strings.Contains(errStr, "going away") ||
-		strings.Contains(errStr, "connection reset by peer")
-}
-
-func handlePlayerError(
-	p *types.Player,
-	err error,
-	r *types.Room,
-) {
-	cId := fmt.Sprintf("%s-%s", r.Id, p.Id)
-	log.Printf("connection %s closed with %s", cId, err.Error())
-	log.Printf("%s is sitting out pending reconnection", p.Id)
-	dErr := cs.DeleteConnection(cId)
-	if dErr != nil {
-		// We will keep trying this every time we fail to use the broken connection,
-		// so just print the error and continue
-		log.Printf("failed to delete connection %s: %s", cId, dErr)
-	}
-	p.SittingOut = true
-	broadcast(
-		r,
-		types.ToPlayerMessage{
-			Type:     types.MessageTypePlayerDisconnected,
-			PlayerId: p.Id,
-		},
-		cs)
-	if r.GameTable != nil {
-		r.GameTable.SetPlayerDefaulting(p.Id, true)
-		if r.GameTable.State().Active.ID == p.Id {
-			handleMessageFromPlayer(
-				types.FromPlayerMessage{
-					Type: types.MessageTypePlayerAction,
-					Action: table.Action{
-						Type: table.Fold,
-					},
-				},
-				p,
-				r,
-				cs)
-		}
-	}
 }

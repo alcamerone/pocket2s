@@ -3,6 +3,7 @@ package room
 import (
 	"fmt"
 	"log"
+	"maps"
 	"math/rand/v2"
 	"time"
 
@@ -18,6 +19,7 @@ type Player struct {
 	Ready      bool
 	SittingOut bool
 	Broke      bool
+	Connected  bool
 }
 
 type RoomOpts struct {
@@ -42,10 +44,12 @@ type State struct {
 }
 
 func (r *Room) State() State {
+	var pm map[string]Player
+	maps.Copy(pm, r.PlayerMap)
 	return State{
 		Id:             r.Id,
 		Opts:           r.Opts,
-		PlayerMap:      r.PlayerMap,
+		PlayerMap:      pm,
 		GameTableState: r.GameTable.State(),
 	}
 }
@@ -78,8 +82,11 @@ func (r *Room) PlayersAreReady() bool {
 }
 
 func (r *Room) ResetPlayersReady() {
-	for _, p := range r.PlayerMap {
+	var p Player
+	for id := range r.PlayerMap {
+		p = r.PlayerMap[id]
 		p.Ready = false
+		r.PlayerMap[id] = p
 	}
 }
 
@@ -125,12 +132,6 @@ func (r *Room) GetObfuscatedTableState() table.State {
 		}
 	}
 	tableState.Seats = seats
-	active := table.Player{
-		ID:         tableState.Active.ID,
-		Chips:      tableState.Active.Chips,
-		ChipsInPot: tableState.Active.ChipsInPot,
-	}
-	tableState.Active = active
 	return tableState
 }
 
@@ -179,11 +180,8 @@ func (r *Room) GetResultStr() string {
 }
 
 func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, error) {
-	var (
-		state State
-		err   error
-	)
-	player, _ := r.PlayerMap[msg.PlayerId] // TODO handle player not found? Should this happen up-stream?
+	var err error
+	player := r.PlayerMap[msg.PlayerId] // TODO handle player not found? Should this happen up-stream?
 	switch msg.Type {
 	case messaging.MessageTypeReady, messaging.MessageTypeSitOut:
 		isReady := msg.Type == messaging.MessageTypeReady
@@ -232,10 +230,9 @@ func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, 
 			} else {
 				r.GameTable.NewRound()
 			}
-			state = r.State()
-		} else {
-			return state, nil
 		}
+		r.PlayerMap[msg.PlayerId] = player
+		return r.State(), nil
 	case messaging.MessageTypeBuyIn:
 		if r.GameTable != nil {
 			err = r.GameTable.BuyPlayerIn(player.Id)
@@ -243,52 +240,40 @@ func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, 
 				log.Printf("error buying %s in; not found", player.Id)
 			}
 			player.Broke = false
+			r.PlayerMap[msg.PlayerId] = player
 			return r.HandleMessageFromPlayer(messaging.FromPlayerMessage{
 				PlayerId: msg.PlayerId,
 				Type:     messaging.MessageTypeReady})
 		}
 	case messaging.MessageTypePlayerAction:
 		if player.Id != r.GameTable.Active().ID {
-			return State{}, fmt.Errorf(
-				"ignoring action request %s from player %s as it is not their turn",
+			log.Printf(
+				"Ignoring action request %s from player %s as it is not their turn",
 				msg.Action.Type.String(),
 				player.Id)
+			return State{}, table.ErrIllegalAction
 		}
 		_, err := r.GameTable.Act(msg.Action)
 		if err != nil {
-			// cId := fmt.Sprintf("%s-%s", r.Id, p.Id)
-			// pc, cErr := cs.GetConnection(cId)
-			// if cErr != nil {
-			// 	handlePlayerError(p, cErr, r, cs)
-			// }
-			// pc.WriteJSON(messaging.ToPlayerMessage{ // TODO Implement
-			// 	Type:        messaging.MessageTypeIllegalAction,
-			// 	TableState:  r.GetObfuscatedTableState(),
-			// 	PlayerState: r.GetPlayerState(p.Id),
-			// })
-			return State{}, fmt.Errorf("%s by player %s", err.Error(), player.Id)
+			log.Printf("Error performing action by player %s: %s", player.Id, err.Error())
+			return State{}, err
 		}
-		broadcast(
-			r,
-			messaging.ToPlayerMessage{
-				Type:         messaging.MessageTypePlayerAction,
-				PlayerAction: messaging.PlayerAction{Action: msg.Action, PlayerId: player.Id},
-			})
 		return r.State(), err
 	default:
 		return State{}, fmt.Errorf("invalid message type %d", msg.Type)
 	}
-	tableState := r.GetObfuscatedTableState()
-	result := r.GetResultStr()
-	if result != "" {
+	if r.GameTable.State().Status == table.Done {
+		var p Player
+		// Mark any broke players as such
+		for pId := range r.PlayerMap {
+			if r.GetPlayerState(pId).Chips == 0 {
+				p = r.PlayerMap[pId]
+				p.Broke = true
+				r.PlayerMap[pId] = p
+			}
+		}
+
 		r.ResetPlayersReady()
 	}
-	broadcast(
-		r,
-		messaging.ToPlayerMessage{
-			Type:       messaging.MessageTypeTableState,
-			TableState: tableState,
-			Result:     result,
-		})
 	return r.State(), nil
 }
