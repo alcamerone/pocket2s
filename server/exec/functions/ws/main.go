@@ -14,7 +14,9 @@ import (
 	"github.com/alcamerone/pocket2s/messaging"
 	"github.com/alcamerone/pocket2s/room"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
@@ -50,7 +52,10 @@ func handleMessage(msg json.RawMessage) (any, error) {
 	}
 
 	// Initialise messenger
-	msgr := messaging.NewLambdaMessenger(os.Getenv("AWS_APIGW_MESSAGING_ENDPOINT"))
+	apigwmapi := apigatewaymanagementapi.New(apigatewaymanagementapi.Options{
+		BaseEndpoint: aws.String(os.Getenv("AWS_APIGW_WS_ENDPOINT")),
+	})
+	msgr := messaging.NewLambdaMessenger(apigwmapi)
 
 	// Process player action
 	_, err = r.HandleMessageFromPlayer(m)

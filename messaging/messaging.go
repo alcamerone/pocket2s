@@ -14,22 +14,25 @@ import (
 )
 
 type Messenger interface {
+	ConnectionExists(ctx context.Context, id string) (bool, error)
+	NewConnection(id string, conn *websocket.Conn)
+
+	// Depending on the type of Messenger, the error that indicates a connection is broken
+	// may vary.
+	// `IsClosedConnectionError` provides an abstraction that lets each Messenger define
+	// this individually.
+	IsClosedConnectionError(err error) bool
+
+	// `HandleConnectionError` allows each Messenger type to define any actions that
+	// need to be taken to clean up after a broken connection.
+	HandleConnectionError(connId string)
+
 	// `sendMessageTo` defines the logic for the actual sending of a message on a
 	// connection.
 	// Note that this method is only used internally to the `messaging` package;
 	// external packages should only use the exposed `SendMessageTo` and `Broadcast`
 	// functions.
 	sendMessageTo(ctx context.Context, connId string, msg ToPlayerMessage) error
-
-	// Depending on the type of Messenger, the error that indicates a connection is broken
-	// may vary.
-	// `isClosedConnectionError` provides an abstraction that lets each Messenger define
-	// this individually.
-	isClosedConnectionError(err error) bool
-
-	// `handleConnectionError` allows each Messenger type to define any actions that
-	// need to be taken to clean up after a broken connection.
-	handleConnectionError(connId string)
 }
 
 type InMemoryMessenger struct {
@@ -46,23 +49,15 @@ func (m *InMemoryMessenger) Connections() map[string]*websocket.Conn {
 	return m.conns
 }
 
-func (m *InMemoryMessenger) sendMessageTo(
-	ctx context.Context,
-	connId string,
-	msg ToPlayerMessage,
-) error {
-	return m.conns[connId].WriteJSON(msg)
+func (m *InMemoryMessenger) ConnectionExists(_ context.Context, id string) (bool, error) {
+	return m.conns[id] != nil, nil
 }
 
-func (m *InMemoryMessenger) handleConnectionError(connId string) {
-	c := m.conns[connId]
-	if c != nil {
-		c.Close()
-	}
-	delete(m.conns, connId)
+func (m *InMemoryMessenger) NewConnection(id string, conn *websocket.Conn) {
+	m.conns[id] = conn
 }
 
-func (m *InMemoryMessenger) isClosedConnectionError(err error) bool {
+func (m *InMemoryMessenger) IsClosedConnectionError(err error) bool {
 	errStr := strings.ToLower(err.Error())
 	return strings.Contains(errStr, "use of closed network connection") ||
 		strings.Contains(errStr, "broken pipe") ||
@@ -71,12 +66,55 @@ func (m *InMemoryMessenger) isClosedConnectionError(err error) bool {
 		strings.Contains(errStr, "connection reset by peer")
 }
 
-type LambdaMessenger struct {
-	endpoint string
+func (m *InMemoryMessenger) HandleConnectionError(connId string) {
+	c := m.conns[connId]
+	if c != nil {
+		c.Close()
+	}
+	delete(m.conns, connId)
 }
 
-func NewLambdaMessenger(endpoint string) *LambdaMessenger {
-	return &LambdaMessenger{endpoint}
+func (m *InMemoryMessenger) sendMessageTo(
+	ctx context.Context,
+	connId string,
+	msg ToPlayerMessage,
+) error {
+	return m.conns[connId].WriteJSON(msg)
+}
+
+type LambdaMessenger struct {
+	apigwmapiClient *apigatewaymanagementapi.Client
+}
+
+func NewLambdaMessenger(apigwmapiClient *apigatewaymanagementapi.Client) *LambdaMessenger {
+	return &LambdaMessenger{apigwmapiClient}
+}
+
+func (m *LambdaMessenger) ConnectionExists(ctx context.Context, id string) (bool, error) {
+	_, err := m.apigwmapiClient.GetConnection(ctx, &apigatewaymanagementapi.GetConnectionInput{
+		ConnectionId: &id,
+	})
+	if err == nil {
+		return true, nil
+	}
+	_, isGoneError := errors.AsType[*types.GoneException](err)
+	if isGoneError {
+		return false, nil
+	}
+	return false, err
+}
+
+func (m *LambdaMessenger) NewConnection(_ string, _ *websocket.Conn) {
+	// No-op; LambdaMessenger does not need to manage connections
+}
+
+func (m *LambdaMessenger) IsClosedConnectionError(err error) bool {
+	var gone *types.GoneException
+	return errors.As(err, &gone)
+}
+
+func (m *LambdaMessenger) HandleConnectionError(connId string) {
+	// No-op; LambdaMessenger does not need to manage connections
 }
 
 func (m *LambdaMessenger) sendMessageTo(
@@ -85,24 +123,12 @@ func (m *LambdaMessenger) sendMessageTo(
 	msg ToPlayerMessage,
 ) error {
 	jMsg, err := json.Marshal(msg)
-	apigmapi := apigatewaymanagementapi.New(apigatewaymanagementapi.Options{
-		BaseEndpoint: &m.endpoint,
-	})
 	input := &apigatewaymanagementapi.PostToConnectionInput{
 		ConnectionId: &connId,
 		Data:         jMsg,
 	}
-	_, err = apigmapi.PostToConnection(ctx, input)
+	_, err = m.apigwmapiClient.PostToConnection(ctx, input)
 	return err
-}
-
-func (m *LambdaMessenger) isClosedConnectionError(err error) bool {
-	var gone *types.GoneException
-	return errors.As(err, &gone)
-}
-
-func (m *LambdaMessenger) handleConnectionError(connId string) {
-	// No-op; LambdaMessenger does not need to manage connections
 }
 
 // `Broadcast` is a convenience method for sending the same message on multiple
@@ -123,7 +149,7 @@ func Broadcast(
 			log.Printf(
 				"giving up sending state to connection %s due to too many errors",
 				connId)
-			m.handleConnectionError(connId)
+			m.HandleConnectionError(connId)
 			if errConns == nil {
 				errConns = []string{connId}
 			} else {
@@ -152,8 +178,8 @@ func SendMessageTo(
 		if err == nil {
 			return nil
 		}
-		if m.isClosedConnectionError(err) {
-			m.handleConnectionError(connId)
+		if m.IsClosedConnectionError(err) {
+			m.HandleConnectionError(connId)
 			return err
 		}
 		log.Printf("error sending message to connection %s: %s", connId, err.Error())
@@ -161,6 +187,6 @@ func SendMessageTo(
 		backoff *= 2
 	}
 	// Failed to send message to player after all retries
-	m.handleConnectionError(connId)
+	m.HandleConnectionError(connId)
 	return err
 }
