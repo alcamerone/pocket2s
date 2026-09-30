@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/alcamerone/joker/table"
-	"github.com/alcamerone/pocket2s/db"
-	"github.com/alcamerone/pocket2s/messaging"
-	"github.com/alcamerone/pocket2s/room"
+	"github.com/alcamerone/pocket2s/server/db"
+	"github.com/alcamerone/pocket2s/server/messaging"
+	"github.com/alcamerone/pocket2s/server/room"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"

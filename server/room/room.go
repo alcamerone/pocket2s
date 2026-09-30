@@ -9,8 +9,8 @@ import (
 
 	"github.com/alcamerone/joker/hand"
 	"github.com/alcamerone/joker/table"
-	"github.com/alcamerone/pocket2s/messaging"
-	"github.com/alcamerone/pocket2s/randSource"
+	"github.com/alcamerone/pocket2s/server/messaging"
+	"github.com/alcamerone/pocket2s/server/randSource"
 )
 
 type Player struct {

@@ -7,8 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	pocket2shttp "github.com/alcamerone/pocket2s/server/http"
-	httpRooms "github.com/alcamerone/pocket2s/server/http/rooms"
+	"github.com/alcamerone/pocket2s/server/http/rooms"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/gocraft/web"
@@ -67,13 +66,13 @@ func handler(req events.APIGatewayProxyRequest, handler http.Handler) (events.AP
 	}
 
 	// Create a router and attach the routes as in the server program
-	router := web.New(pocket2shttp.Context{})
-	router.Middleware(func(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
+	router := web.New(rooms.Context{})
+	router.Middleware(func(ctx *rooms.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
 		// TODO Inject stores
 
 		next(rw, req)
 	})
-	httpRooms.AddRoomRoutes(router)
+	rooms.AddRoomRoutes(router)
 
 	rw := APIGatewayProxyResponseWriter{}
 	handler.ServeHTTP(&rw, goHttpReq)

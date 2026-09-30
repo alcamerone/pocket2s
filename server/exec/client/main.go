@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/alcamerone/joker/table"
-	"github.com/alcamerone/pocket2s/messaging"
+	"github.com/alcamerone/pocket2s/server/messaging"
 	"github.com/gorilla/websocket"
 )
 

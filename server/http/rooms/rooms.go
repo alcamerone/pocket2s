@@ -1,4 +1,4 @@
-package httpRooms
+package rooms
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 	"strings"
 
 	"github.com/alcamerone/joker/table"
-	"github.com/alcamerone/pocket2s/messaging"
-	"github.com/alcamerone/pocket2s/room"
-	pocket2shttp "github.com/alcamerone/pocket2s/server/http"
+	"github.com/alcamerone/pocket2s/server/db"
+	"github.com/alcamerone/pocket2s/server/messaging"
+	"github.com/alcamerone/pocket2s/server/room"
 	"github.com/gocraft/web"
 	"github.com/gorilla/websocket"
 )
@@ -26,15 +26,32 @@ var wsUpgrader = websocket.Upgrader{
 	},
 }
 
+type Context struct {
+	Rooms     db.RoomStore
+	Messenger messaging.Messenger
+}
+
+func SetHeaders(ctx *Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
+	reqOrigin := req.Request.Header.Get("Origin")
+	if reqOrigin == "" {
+		log.Printf("received request with no origin header from %s", req.Request.RemoteAddr)
+		rw.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	rw.Header().Add("Access-Control-Allow-Origin", reqOrigin)
+	rw.Header().Add("Access-Control-Allow-Headers", "Content-Type")
+	next(rw, req)
+}
+
 func AddRoomRoutes(router *web.Router) {
-	router.Subrouter(pocket2shttp.Context{}, "/room").
-		Middleware(pocket2shttp.SetHeaders).
+	router.Subrouter(Context{}, "/room").
+		Middleware(SetHeaders).
 		Get("/check/:roomId", handleRoomCheck).
 		Post("/create/:roomId", handleCreateRoom).
 		Get("/connect/:roomId/:playerId", handleConnect)
 }
 
-func handleRoomCheck(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.Request) {
+func handleRoomCheck(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 	r, err := ctx.Rooms.GetRoom(req.Context(), req.PathParams["roomId"])
 	if err != nil {
 		rw.WriteHeader(http.StatusInternalServerError)
@@ -47,7 +64,7 @@ func handleRoomCheck(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.
 	rw.WriteHeader(http.StatusOK)
 }
 
-func handleCreateRoom(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.Request) {
+func handleCreateRoom(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 	roomId := req.PathParams["roomId"]
 	r, err := ctx.Rooms.GetRoom(req.Context(), req.PathParams["roomId"])
 	if err != nil {
@@ -83,7 +100,7 @@ func handleCreateRoom(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web
 	rw.WriteHeader(http.StatusCreated)
 }
 
-func handleConnect(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.Request) {
+func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 	r, err := ctx.Rooms.GetRoom(req.Context(), req.PathParams["roomId"])
 	if err != nil {
 		log.Printf("error accessing room %s: %s", req.PathParams["roomId"], err.Error())

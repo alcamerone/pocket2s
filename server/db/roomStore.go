@@ -8,9 +8,9 @@ import (
 
 	"github.com/alcamerone/joker/hand"
 	"github.com/alcamerone/joker/table"
-	"github.com/alcamerone/pocket2s/cmap"
-	"github.com/alcamerone/pocket2s/randSource"
-	"github.com/alcamerone/pocket2s/room"
+	"github.com/alcamerone/pocket2s/server/cmap"
+	"github.com/alcamerone/pocket2s/server/randSource"
+	"github.com/alcamerone/pocket2s/server/room"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbTypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"

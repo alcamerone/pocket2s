@@ -28,11 +28,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alcamerone/pocket2s/db"
-	"github.com/alcamerone/pocket2s/messaging"
-	"github.com/alcamerone/pocket2s/room"
-	pocket2shttp "github.com/alcamerone/pocket2s/server/http"
-	httpRooms "github.com/alcamerone/pocket2s/server/http/rooms"
+	"github.com/alcamerone/pocket2s/server/db"
+	"github.com/alcamerone/pocket2s/server/http/rooms"
+	"github.com/alcamerone/pocket2s/server/messaging"
+	"github.com/alcamerone/pocket2s/server/room"
 	"github.com/gocraft/web"
 )
 
@@ -68,16 +67,16 @@ func main() {
 			Ante:       DEFAULT_ANTE,
 		},
 	})
-	router = web.New(pocket2shttp.Context{}).
+	router = web.New(rooms.Context{}).
 		Get("/healthcheck", handleHealthcheck)
-	router.Middleware(func(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
+	router.Middleware(func(ctx *rooms.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
 		// Inject dependencies
 		ctx.Rooms = roomStore
 		ctx.Messenger = messenger
 		next(rw, req)
 	})
-	httpRooms.AddRoomRoutes(router)
-	router.Middleware(func(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
+	rooms.AddRoomRoutes(router)
+	router.Middleware(func(ctx *rooms.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
 		// If the call was to connect,
 		// ensure that the room in question is not erroneously cleaned up
 		if strings.Contains(req.URL.Path, "connect") {
@@ -175,8 +174,6 @@ func main() {
 	}
 }
 
-// TODO maybe create a new context that embeds the pocket2shttp Context?
-func handleHealthcheck(ctx *pocket2shttp.Context, rw web.ResponseWriter, req *web.Request) {
-	// TODO for now just return 200 to say the server is alive
+func handleHealthcheck(ctx *rooms.Context, rw web.ResponseWriter, req *web.Request) {
 	rw.WriteHeader(http.StatusOK)
 }
