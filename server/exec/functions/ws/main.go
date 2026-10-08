@@ -100,7 +100,7 @@ func handleMessage(msg json.RawMessage) (any, error) {
 			resp.Result = res
 		}
 	}
-	errConns := messaging.Broadcast(context.Background(), msgr, resp, getActiveConnections(r))
+	errConns := broadcast(context.Background(), msgr, r, resp)
 	if errConns != nil {
 		handleConnectionErrors(context.Background(), msgr, r, errConns)
 	}
@@ -112,16 +112,6 @@ func handleMessage(msg json.RawMessage) (any, error) {
 	}
 
 	return nil, nil
-}
-
-func getActiveConnections(r *room.Room) []string {
-	connIds := make([]string, 0, len(r.PlayerMap))
-	for _, p := range r.PlayerMap {
-		if p.Connected {
-			connIds = append(connIds, fmt.Sprintf("%s-%s", r.Id, p.Id))
-		}
-	}
-	return connIds
 }
 
 func handleConnectionErrors(
@@ -153,21 +143,60 @@ func handleConnectionErrors(
 		}
 
 		// Broadcast player disconnected state
-		conns := getActiveConnections(r)
-		bErrConns := messaging.Broadcast(
-			ctx,
-			m,
-			messaging.ToPlayerMessage{
-				Type:     messaging.MessageTypePlayerDisconnected,
-				PlayerId: pId,
-			},
-			conns)
+		bErrConns := broadcast(ctx, m, r, messaging.ToPlayerMessage{
+			Type:     messaging.MessageTypePlayerDisconnected,
+			PlayerId: pId,
+		})
 
 		// Recursively handle any errors encountered while broadcasting
 		if bErrConns != nil {
 			handleConnectionErrors(ctx, m, r, bErrConns)
 		}
 	}
+}
+
+// `broadcast` is a convenience method for sending the same message to multiple
+// players, modifying the table state for each player so that they only receive
+// the information they should have.
+// It returns a list of all connections on which the message failed
+// to be sent to allow the calling package to perform any actions necessary on
+// a connection failure.
+func broadcast(
+	ctx context.Context,
+	m messaging.Messenger,
+	r *room.Room,
+	msg messaging.ToPlayerMessage,
+) (errConns []string) {
+	var (
+		connId string
+		err    error
+	)
+
+	for _, p := range r.PlayerMap {
+		if p.Connected {
+			if msg.Type == messaging.MessageTypeTableState {
+				msg.PlayerState = r.GetPlayerState(p.Id)
+				if msg.PlayerState.Chips == 0 && r.GameTable.State().Status == table.Done {
+					p.Broke = true
+				}
+			}
+			connId = fmt.Sprintf("%s-%s", r.Id, p.Id)
+			err = messaging.SendMessageTo(ctx, m, connId, msg)
+			if err != nil {
+				log.Printf(
+					"giving up sending state to connection %s due to too many errors",
+					connId)
+				m.HandleConnectionError(connId)
+				if errConns == nil {
+					errConns = []string{connId}
+				} else {
+					errConns = append(errConns, connId)
+				}
+			}
+		}
+	}
+
+	return errConns
 }
 
 func main() {

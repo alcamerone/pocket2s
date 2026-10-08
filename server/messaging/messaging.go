@@ -13,6 +13,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var (
+	ErrInvalidMessageType = errors.New("messaging: Invalid message type")
+)
+
 type Messenger interface {
 	ConnectionExists(ctx context.Context, id string) (bool, error)
 	NewConnection(id string, conn *websocket.Conn)
@@ -129,36 +133,6 @@ func (m *LambdaMessenger) sendMessageTo(
 	}
 	_, err = m.apigwmapiClient.PostToConnection(ctx, input)
 	return err
-}
-
-// `Broadcast` is a convenience method for sending the same message on multiple
-// connections. It returns a list of all connections on which the message failed
-// to be sent to allow the calling package to perform any actions necessary on
-// a connection failure.
-func Broadcast(
-	ctx context.Context,
-	m Messenger,
-	msg ToPlayerMessage,
-	connIds []string,
-) (errConns []string) {
-	var err error
-
-	for _, connId := range connIds {
-		err = SendMessageTo(ctx, m, connId, msg)
-		if err != nil {
-			log.Printf(
-				"giving up sending state to connection %s due to too many errors",
-				connId)
-			m.HandleConnectionError(connId)
-			if errConns == nil {
-				errConns = []string{connId}
-			} else {
-				errConns = append(errConns, connId)
-			}
-		}
-	}
-
-	return errConns
 }
 
 func SendMessageTo(

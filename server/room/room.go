@@ -261,13 +261,6 @@ func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, 
 		return State{}, fmt.Errorf("invalid message type %d", msg.Type)
 	}
 	if r.GameTable.State().Status == table.Done {
-		// Mark any broke players as such
-		for _, p := range r.PlayerMap {
-			if r.GetPlayerState(p.Id).Chips == 0 {
-				p.Broke = true
-			}
-		}
-
 		r.ResetPlayersReady()
 	}
 	return r.State(), nil

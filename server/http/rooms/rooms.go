@@ -179,15 +179,10 @@ func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
 		log.Printf("error sending \"hello\" message to player: %s", err.Error())
 	}
 
-	errConns := messaging.Broadcast(
-		context.Background(),
-		ctx.Messenger,
-		messaging.ToPlayerMessage{
-			Type:     messaging.MessageTypePlayerConnected,
-			PlayerId: playerId,
-		},
-		getActiveConnections(r),
-	)
+	errConns := broadcast(context.Background(), ctx.Messenger, r, messaging.ToPlayerMessage{
+		Type:     messaging.MessageTypePlayerConnected,
+		PlayerId: playerId,
+	})
 	if errConns != nil {
 		handleConnectionErrors(
 			context.Background(),
@@ -196,16 +191,6 @@ func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
 			errConns)
 	}
 	go listenForPlayerMessages(p, r, c, ctx.Messenger)
-}
-
-func getActiveConnections(r *room.Room) []string {
-	connIds := make([]string, 0, len(r.PlayerMap))
-	for _, p := range r.PlayerMap {
-		if p.Connected {
-			connIds = append(connIds, fmt.Sprintf("%s-%s", r.Id, p.Id))
-		}
-	}
-	return connIds
 }
 
 func handleConnectionErrors(
@@ -225,7 +210,6 @@ func handleConnectionErrors(
 		p.Connected = false
 		p.SittingOut = true
 		r.GameTable.SetPlayerDefaulting(pId, true)
-		r.PlayerMap[pId] = p
 
 		// If the player with the connection error is the currently active player,
 		// send a message on their behalf to fold to prevent the game from soft-locking
@@ -237,15 +221,10 @@ func handleConnectionErrors(
 		}
 
 		// Broadcast player disconnected state
-		conns := getActiveConnections(r)
-		bErrConns := messaging.Broadcast(
-			ctx,
-			m,
-			messaging.ToPlayerMessage{
-				Type:     messaging.MessageTypePlayerDisconnected,
-				PlayerId: pId,
-			},
-			conns)
+		bErrConns := broadcast(ctx, m, r, messaging.ToPlayerMessage{
+			Type:     messaging.MessageTypePlayerDisconnected,
+			PlayerId: pId,
+		})
 
 		// Recursively handle any errors encountered while broadcasting
 		if bErrConns != nil {
@@ -262,9 +241,10 @@ func listenForPlayerMessages(
 	m messaging.Messenger,
 ) {
 	var (
-		msg    messaging.FromPlayerMessage
-		err    error
-		connId = fmt.Sprintf("%s-%s", r.Id, p.Id)
+		msg      messaging.FromPlayerMessage
+		err      error
+		errConns []string
+		connId   = fmt.Sprintf("%s-%s", r.Id, p.Id)
 	)
 	for {
 		// Read message
@@ -281,8 +261,10 @@ func listenForPlayerMessages(
 		// Process player action
 		_, err = r.HandleMessageFromPlayer(msg)
 		if err != nil {
-			if errors.Is(err, table.ErrIllegalAction) || errors.Is(err, table.ErrInsufficientBet) {
-				// TODO Add a new message type for the latter case?
+			if errors.Is(err, table.ErrIllegalAction) ||
+				errors.Is(err, table.ErrInsufficientBet) ||
+				errors.Is(err, messaging.ErrInvalidMessageType) {
+				// TODO Add different messages for different errors?
 				connId := fmt.Sprintf("%s-%s", msg.RoomId, msg.PlayerId)
 				err = messaging.SendMessageTo(
 					context.Background(),
@@ -300,27 +282,75 @@ func listenForPlayerMessages(
 		}
 
 		// Broadcast new table state if necessary
-		if (msg.Type == messaging.MessageTypeReady || msg.Type == messaging.MessageTypeSitOut) && !r.PlayersAreReady() {
+		if msg.Type == messaging.MessageTypeBuyIn ||
+			((msg.Type == messaging.MessageTypeReady || msg.Type == messaging.MessageTypeSitOut) && !r.PlayersAreReady()) {
 			// No need to send table state if we are still waiting for players
 			continue
 		}
-		resp := messaging.ToPlayerMessage{TableState: r.GetObfuscatedTableState()}
 		if msg.Type == messaging.MessageTypePlayerAction {
-			resp.Type = messaging.MessageTypePlayerAction
-			resp.PlayerAction = messaging.PlayerAction{
-				Action:   msg.Action,
-				PlayerId: msg.PlayerId,
-			}
-		} else {
-			resp.Type = messaging.MessageTypeTableState
-			res := r.GetResultStr()
-			if res != "" {
-				resp.Result = res
+			errConns = broadcast(context.Background(), m, r, messaging.ToPlayerMessage{
+				Type:         messaging.MessageTypePlayerAction,
+				PlayerAction: messaging.PlayerAction{Action: msg.Action, PlayerId: msg.PlayerId},
+			})
+			if errConns != nil {
+				handleConnectionErrors(context.Background(), m, r, errConns)
 			}
 		}
-		errConns := messaging.Broadcast(context.Background(), m, resp, getActiveConnections(r))
+		resp := messaging.ToPlayerMessage{
+			Type:       messaging.MessageTypeTableState,
+			TableState: r.GetObfuscatedTableState(),
+		}
+		res := r.GetResultStr()
+		if res != "" {
+			resp.Result = res
+		}
+		errConns = broadcast(context.Background(), m, r, resp)
 		if errConns != nil {
 			handleConnectionErrors(context.Background(), m, r, errConns)
 		}
 	}
+}
+
+// `broadcast` is a convenience method for sending the same message to multiple
+// players, modifying the table state for each player so that they only receive
+// the information they should have.
+// It returns a list of all connections on which the message failed
+// to be sent to allow the calling package to perform any actions necessary on
+// a connection failure.
+func broadcast(
+	ctx context.Context,
+	m messaging.Messenger,
+	r *room.Room,
+	msg messaging.ToPlayerMessage,
+) (errConns []string) {
+	var (
+		connId string
+		err    error
+	)
+
+	for _, p := range r.PlayerMap {
+		if p.Connected {
+			if msg.Type == messaging.MessageTypeTableState {
+				msg.PlayerState = r.GetPlayerState(p.Id)
+				if msg.PlayerState.Chips == 0 && r.GameTable.State().Status == table.Done {
+					p.Broke = true
+				}
+			}
+			connId = fmt.Sprintf("%s-%s", r.Id, p.Id)
+			err = messaging.SendMessageTo(ctx, m, connId, msg)
+			if err != nil {
+				log.Printf(
+					"giving up sending state to connection %s due to too many errors",
+					connId)
+				m.HandleConnectionError(connId)
+				if errConns == nil {
+					errConns = []string{connId}
+				} else {
+					errConns = append(errConns, connId)
+				}
+			}
+		}
+	}
+
+	return errConns
 }
