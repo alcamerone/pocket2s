@@ -88,11 +88,14 @@ func (s *DDBRoomStore) GetRoom(ctx context.Context, id string) (*room.Room, erro
 	if err != nil {
 		return nil, err
 	}
-
+	pm := make(map[string]*room.Player)
+	for id, p := range state.PlayerMap {
+		pm[id] = &p
+	}
 	return &room.Room{
 		Id:        state.Id,
 		Opts:      state.Opts,
-		PlayerMap: state.PlayerMap,
+		PlayerMap: pm,
 		GameTable: table.NewFromState(
 			hand.NewDealer(
 				rand.New(

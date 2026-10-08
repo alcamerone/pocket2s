@@ -75,7 +75,7 @@ func (m *InMemoryMessenger) HandleConnectionError(connId string) {
 }
 
 func (m *InMemoryMessenger) sendMessageTo(
-	ctx context.Context,
+	_ context.Context,
 	connId string,
 	msg ToPlayerMessage,
 ) error {

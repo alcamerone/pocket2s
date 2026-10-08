@@ -3,7 +3,6 @@ package room
 import (
 	"fmt"
 	"log"
-	"maps"
 	"math/rand/v2"
 	"time"
 
@@ -32,7 +31,7 @@ type RoomOpts struct {
 type Room struct {
 	Id        string
 	Opts      RoomOpts
-	PlayerMap map[string]Player
+	PlayerMap map[string]*Player
 	GameTable *table.Table
 }
 
@@ -44,8 +43,10 @@ type State struct {
 }
 
 func (r *Room) State() State {
-	var pm map[string]Player
-	maps.Copy(pm, r.PlayerMap)
+	pm := make(map[string]Player, messaging.MAX_PLAYERS)
+	for id, p := range r.PlayerMap {
+		pm[id] = *p
+	}
 	return State{
 		Id:             r.Id,
 		Opts:           r.Opts,
@@ -82,11 +83,8 @@ func (r *Room) PlayersAreReady() bool {
 }
 
 func (r *Room) ResetPlayersReady() {
-	var p Player
-	for id := range r.PlayerMap {
-		p = r.PlayerMap[id]
+	for _, p := range r.PlayerMap {
 		p.Ready = false
-		r.PlayerMap[id] = p
 	}
 }
 
@@ -204,6 +202,7 @@ func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, 
 		if (r.GameTable == nil || r.GameTable.State().Status == table.Done) &&
 			r.PlayersAreReady() {
 			// START THE GAME ALREADY
+			log.Println("Players are ready, starting a round")
 			if r.GameTable == nil {
 				r.GameTable = table.New(
 					hand.NewDealer(
@@ -231,7 +230,6 @@ func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, 
 				r.GameTable.NewRound()
 			}
 		}
-		r.PlayerMap[msg.PlayerId] = player
 		return r.State(), nil
 	case messaging.MessageTypeBuyIn:
 		if r.GameTable != nil {
@@ -263,13 +261,10 @@ func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, 
 		return State{}, fmt.Errorf("invalid message type %d", msg.Type)
 	}
 	if r.GameTable.State().Status == table.Done {
-		var p Player
 		// Mark any broke players as such
-		for pId := range r.PlayerMap {
-			if r.GetPlayerState(pId).Chips == 0 {
-				p = r.PlayerMap[pId]
+		for _, p := range r.PlayerMap {
+			if r.GetPlayerState(p.Id).Chips == 0 {
 				p.Broke = true
-				r.PlayerMap[pId] = p
 			}
 		}
 

@@ -14,7 +14,7 @@ import (
 	"github.com/alcamerone/pocket2s/server/db"
 	"github.com/alcamerone/pocket2s/server/messaging"
 	"github.com/alcamerone/pocket2s/server/room"
-	"github.com/gocraft/web"
+	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 )
 
@@ -31,28 +31,32 @@ type Context struct {
 	Messenger messaging.Messenger
 }
 
-func SetHeaders(ctx *Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
-	reqOrigin := req.Request.Header.Get("Origin")
-	if reqOrigin == "" {
-		log.Printf("received request with no origin header from %s", req.Request.RemoteAddr)
-		rw.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	rw.Header().Add("Access-Control-Allow-Origin", reqOrigin)
-	rw.Header().Add("Access-Control-Allow-Headers", "Content-Type")
-	next(rw, req)
+func setHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		reqOrigin := req.Header.Get("Origin")
+		if reqOrigin == "" {
+			log.Printf("received request with no origin header from %s", req.RemoteAddr)
+			rw.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		rw.Header().Add("Access-Control-Allow-Origin", reqOrigin)
+		rw.Header().Add("Access-Control-Allow-Headers", "Content-Type")
+		next.ServeHTTP(rw, req)
+	})
 }
 
-func AddRoomRoutes(router *web.Router) {
-	router.Subrouter(Context{}, "/room").
-		Middleware(SetHeaders).
-		Get("/check/:roomId", handleRoomCheck).
-		Post("/create/:roomId", handleCreateRoom).
-		Get("/connect/:roomId/:playerId", handleConnect)
+func AttachRoomRoutes(router chi.Router, ctx *Context) {
+	router.Route("/room", func(r chi.Router) {
+		r.Use(setHeaders)
+		r.Get("/check/{roomId}", ctx.handleRoomCheck)
+		r.Post("/create/{roomId}", ctx.handleCreateRoom)
+		r.Get("/connect/{roomId}/{playerId}", ctx.handleConnect)
+	})
 }
 
-func handleRoomCheck(ctx *Context, rw web.ResponseWriter, req *web.Request) {
-	r, err := ctx.Rooms.GetRoom(req.Context(), req.PathParams["roomId"])
+func (ctx *Context) handleRoomCheck(rw http.ResponseWriter, req *http.Request) {
+	roomId := chi.URLParam(req, "roomId")
+	r, err := ctx.Rooms.GetRoom(req.Context(), roomId)
 	if err != nil {
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
@@ -64,9 +68,9 @@ func handleRoomCheck(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 	rw.WriteHeader(http.StatusOK)
 }
 
-func handleCreateRoom(ctx *Context, rw web.ResponseWriter, req *web.Request) {
-	roomId := req.PathParams["roomId"]
-	r, err := ctx.Rooms.GetRoom(req.Context(), req.PathParams["roomId"])
+func (ctx *Context) handleCreateRoom(rw http.ResponseWriter, req *http.Request) {
+	roomId := chi.URLParam(req, "roomId")
+	r, err := ctx.Rooms.GetRoom(req.Context(), roomId)
 	if err != nil {
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
@@ -93,27 +97,28 @@ func handleCreateRoom(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 
 	ctx.Rooms.NewRoom(req.Context(), &room.Room{
 		Id:        roomId,
-		PlayerMap: make(map[string]room.Player, messaging.MAX_PLAYERS),
+		PlayerMap: make(map[string]*room.Player, messaging.MAX_PLAYERS),
 		Opts:      opts,
 	})
 	log.Printf("created room %s", roomId)
 	rw.WriteHeader(http.StatusCreated)
 }
 
-func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
-	r, err := ctx.Rooms.GetRoom(req.Context(), req.PathParams["roomId"])
+func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
+	roomId := chi.URLParam(req, "roomId")
+	r, err := ctx.Rooms.GetRoom(req.Context(), roomId)
 	if err != nil {
-		log.Printf("error accessing room %s: %s", req.PathParams["roomId"], err.Error())
+		log.Printf("error accessing room %s: %s", roomId, err.Error())
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	if r == nil {
-		log.Printf("error: room %s does not exist", req.PathParams["roomId"])
+		log.Printf("error: room %s does not exist", roomId)
 		rw.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	playerId := req.PathParams["playerId"]
+	playerId := chi.URLParam(req, "playerId")
 
 	p, playerExists := r.PlayerMap[playerId]
 	if playerExists {
@@ -144,24 +149,26 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 		return
 	}
 
-	c, err := wsUpgrader.Upgrade(rw, req.Request, nil)
+	c, err := wsUpgrader.Upgrade(rw, req, nil)
 	if err != nil {
 		log.Printf("error establishing connection: %s", err.Error())
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
+	// Store the new connection
+	ctx.Messenger.NewConnection(fmt.Sprintf("%s-%s", r.Id, playerId), c)
 	if playerExists {
-		// Store the new connection
-		ctx.Messenger.NewConnection(fmt.Sprintf("%s-%s", r.Id, playerId), c)
+		p.Connected = true
 		p.Ready = false
 		p.SittingOut = true
 		log.Printf("%s has rejoined", playerId)
 	} else {
 		tablePos := len(r.PlayerMap)
-		p = room.Player{
-			Id:       playerId,
-			TablePos: tablePos,
+		p = &room.Player{
+			Id:        playerId,
+			TablePos:  tablePos,
+			Connected: true,
 		}
 		r.PlayerMap[playerId] = p
 		log.Printf("%s has joined", playerId)
@@ -188,7 +195,7 @@ func handleConnect(ctx *Context, rw web.ResponseWriter, req *web.Request) {
 			r,
 			errConns)
 	}
-	go listenForPlayerMessages(&p, r, c, ctx.Messenger)
+	go listenForPlayerMessages(p, r, c, ctx.Messenger)
 }
 
 func getActiveConnections(r *room.Room) []string {
@@ -293,6 +300,10 @@ func listenForPlayerMessages(
 		}
 
 		// Broadcast new table state if necessary
+		if (msg.Type == messaging.MessageTypeReady || msg.Type == messaging.MessageTypeSitOut) && !r.PlayersAreReady() {
+			// No need to send table state if we are still waiting for players
+			continue
+		}
 		resp := messaging.ToPlayerMessage{TableState: r.GetObfuscatedTableState()}
 		if msg.Type == messaging.MessageTypePlayerAction {
 			resp.Type = messaging.MessageTypePlayerAction

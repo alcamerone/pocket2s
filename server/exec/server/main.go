@@ -32,7 +32,7 @@ import (
 	"github.com/alcamerone/pocket2s/server/http/rooms"
 	"github.com/alcamerone/pocket2s/server/messaging"
 	"github.com/alcamerone/pocket2s/server/room"
-	"github.com/gocraft/web"
+	"github.com/go-chi/chi/v5"
 )
 
 const (
@@ -45,7 +45,6 @@ const (
 )
 
 var (
-	router                *web.Router
 	roomStore             = db.NewInMemoryRoomStore()
 	messenger             = messaging.NewInMemoryMessenger()
 	cancelSelfDestructChs = make(map[string]chan struct{})
@@ -59,7 +58,7 @@ func main() {
 	// TODO default room for dev. Remove before prod
 	roomStore.NewRoom(context.Background(), &room.Room{
 		Id:        "pocket2s",
-		PlayerMap: make(map[string]room.Player, MAX_PLAYERS),
+		PlayerMap: make(map[string]*room.Player, MAX_PLAYERS),
 		Opts: room.RoomOpts{
 			BuyIn:      DEFAULT_BUY_IN,
 			BigBlind:   DEFAULT_BIG_BLIND,
@@ -67,28 +66,17 @@ func main() {
 			Ante:       DEFAULT_ANTE,
 		},
 	})
-	router = web.New(rooms.Context{}).
-		Get("/healthcheck", handleHealthcheck)
-	router.Middleware(func(ctx *rooms.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
-		// Inject dependencies
-		ctx.Rooms = roomStore
-		ctx.Messenger = messenger
-		next(rw, req)
-	})
-	rooms.AddRoomRoutes(router)
-	router.Middleware(func(ctx *rooms.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
-		// If the call was to connect,
-		// ensure that the room in question is not erroneously cleaned up
-		if strings.Contains(req.URL.Path, "connect") {
-			rId := req.PathParams["roomId"]
-			if cancelSelfDestructChs[rId] != nil {
-				cancelSelfDestructChs[rId] <- struct{}{}
-			} else {
-				cancelSelfDestructChs[rId] = make(chan struct{}, 1)
-			}
-		}
-		next(rw, req)
-	})
+
+	// Inject dependencies
+	roomsCtx := &rooms.Context{
+		Rooms:     roomStore,
+		Messenger: messenger,
+	}
+
+	router := chi.NewRouter()
+	router.Use(cancelSelfDestructMiddleware)
+	router.Get("/healthcheck", handleHealthcheck)
+	rooms.AttachRoomRoutes(router, roomsCtx)
 
 	go func() {
 		// Periodically check for empty rooms and close them if found
@@ -117,7 +105,7 @@ func main() {
 				// For prod, destroy it
 				if r.Id == "pocket2s" {
 					r.GameTable = nil
-					r.PlayerMap = make(map[string]room.Player, MAX_PLAYERS)
+					r.PlayerMap = make(map[string]*room.Player, MAX_PLAYERS)
 					continue
 				}
 				roomStore.DeleteRoom(context.Background(), r.Id)
@@ -174,6 +162,25 @@ func main() {
 	}
 }
 
-func handleHealthcheck(ctx *rooms.Context, rw web.ResponseWriter, req *web.Request) {
+// cancelSelfDestructMiddleware ensures that, if the call was to connect,
+// the room in question is not erroneously cleaned up.
+func cancelSelfDestructMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if strings.Contains(req.URL.Path, "connect") {
+			segments := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
+			if len(segments) >= 2 {
+				rId := segments[len(segments)-2]
+				if cancelSelfDestructChs[rId] != nil {
+					cancelSelfDestructChs[rId] <- struct{}{}
+				} else {
+					cancelSelfDestructChs[rId] = make(chan struct{}, 1)
+				}
+			}
+		}
+		next.ServeHTTP(rw, req)
+	})
+}
+
+func handleHealthcheck(rw http.ResponseWriter, req *http.Request) {
 	rw.WriteHeader(http.StatusOK)
 }

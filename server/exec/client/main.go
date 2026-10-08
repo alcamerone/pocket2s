@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -62,6 +63,9 @@ func getInput(toUpper bool) (string, error) {
 
 func main() {
 	var err error
+
+	log.SetFlags(log.Lshortfile | log.Lmicroseconds)
+
 	inputReader = bufio.NewReader(os.Stdin)
 	fmt.Println("Welcome! Who are you?")
 	for {
@@ -90,7 +94,10 @@ func main() {
 		HandshakeTimeout: 30 * time.Second,
 	}
 
-	conn, _, err = wsDialler.Dial("ws://localhost:2222/connect/"+roomId+"/"+playerId, nil)
+	conn, _, err = wsDialler.Dial(
+		"ws://localhost:2222/room/connect/"+roomId+"/"+playerId,
+		http.Header{"Origin": []string{"http://localhost:2222"}},
+	)
 	if err != nil {
 		log.Fatalf("error establishing connection with server: %s", err.Error())
 	}
@@ -154,8 +161,10 @@ func mainLoop() error {
 				action := parseTableAction(ts)
 				err := conn.WriteJSON(
 					messaging.FromPlayerMessage{
-						Type:   messaging.MessageTypePlayerAction,
-						Action: action,
+						Type:     messaging.MessageTypePlayerAction,
+						RoomId:   roomId,
+						PlayerId: playerId,
+						Action:   action,
 					},
 				)
 				if err != nil {
@@ -184,12 +193,24 @@ func awaitPlayerReady(conn *websocket.Conn, playerIsBroke bool) {
 		input, err = getInput(true)
 		if err == nil {
 			if input == SIT_OUT {
-				err = conn.WriteJSON(messaging.FromPlayerMessage{Type: messaging.MessageTypeSitOut})
+				err = conn.WriteJSON(messaging.FromPlayerMessage{
+					Type:     messaging.MessageTypeSitOut,
+					RoomId:   roomId,
+					PlayerId: playerId,
+				})
 			} else {
 				if playerIsBroke {
-					err = conn.WriteJSON(messaging.FromPlayerMessage{Type: messaging.MessageTypeBuyIn})
+					err = conn.WriteJSON(messaging.FromPlayerMessage{
+						Type:     messaging.MessageTypeBuyIn,
+						RoomId:   roomId,
+						PlayerId: playerId,
+					})
 				} else {
-					err = conn.WriteJSON(messaging.FromPlayerMessage{Type: messaging.MessageTypeReady})
+					err = conn.WriteJSON(messaging.FromPlayerMessage{
+						Type:     messaging.MessageTypeReady,
+						RoomId:   roomId,
+						PlayerId: playerId,
+					})
 				}
 			}
 			if err != nil {

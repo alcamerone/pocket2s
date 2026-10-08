@@ -10,7 +10,7 @@ import (
 	"github.com/alcamerone/pocket2s/server/http/rooms"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/gocraft/web"
+	"github.com/go-chi/chi/v5"
 )
 
 // APIGatewayProxyResponseWriter implements http.ResponseWriter
@@ -66,16 +66,14 @@ func handler(req events.APIGatewayProxyRequest, handler http.Handler) (events.AP
 	}
 
 	// Create a router and attach the routes as in the server program
-	router := web.New(rooms.Context{})
-	router.Middleware(func(ctx *rooms.Context, rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc) {
+	roomsCtx := &rooms.Context{
 		// TODO Inject stores
-
-		next(rw, req)
-	})
-	rooms.AddRoomRoutes(router)
+	}
+	router := chi.NewRouter()
+	rooms.AttachRoomRoutes(router, roomsCtx)
 
 	rw := APIGatewayProxyResponseWriter{}
-	handler.ServeHTTP(&rw, goHttpReq)
+	router.ServeHTTP(&rw, goHttpReq)
 	return rw.GetResponse()
 }
 
