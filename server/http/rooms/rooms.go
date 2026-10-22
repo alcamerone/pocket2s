@@ -215,8 +215,9 @@ func handleConnectionErrors(
 		// send a message on their behalf to fold to prevent the game from soft-locking
 		if r.GameTable.State().ActiveIdx == p.TablePos {
 			r.HandleMessageFromPlayer(messaging.FromPlayerMessage{
-				Type:   messaging.MessageTypePlayerAction,
-				Action: table.Action{Type: table.Fold},
+				PlayerId: pId,
+				Type:     messaging.MessageTypePlayerAction,
+				Action:   table.Action{Type: table.Fold},
 			})
 		}
 
@@ -247,8 +248,11 @@ func listenForPlayerMessages(
 		connId   = fmt.Sprintf("%s-%s", r.Id, p.Id)
 	)
 	for {
+		// Clear any previous message
+		msg = messaging.FromPlayerMessage{}
+
 		// Read message
-		err = pc.ReadJSON(&msg) // TODO Implement
+		err = pc.ReadJSON(&msg)
 		if err != nil {
 			if m.IsClosedConnectionError(err) {
 				m.HandleConnectionError(connId)
@@ -279,6 +283,7 @@ func listenForPlayerMessages(
 					handleConnectionErrors(context.Background(), m, r, []string{connId})
 				}
 			}
+			continue
 		}
 
 		// Broadcast new table state if necessary

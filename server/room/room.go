@@ -110,6 +110,7 @@ func (r *Room) GetPlayerState(playerId string) table.Player {
 
 func (r *Room) GetObfuscatedTableState() table.State {
 	tableState := r.GameTable.State()
+	tableState.Deck = nil
 	seats := make([]table.Player, len(tableState.Seats))
 	for i, player := range tableState.Seats {
 		seats[i] = table.Player{
@@ -256,12 +257,12 @@ func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, 
 			log.Printf("Error performing action by player %s: %s", player.Id, err.Error())
 			return State{}, err
 		}
+		if r.GameTable.State().Status == table.Done {
+			r.ResetPlayersReady()
+		}
 		return r.State(), err
 	default:
 		return State{}, fmt.Errorf("invalid message type %d", msg.Type)
-	}
-	if r.GameTable.State().Status == table.Done {
-		r.ResetPlayersReady()
 	}
 	return r.State(), nil
 }
