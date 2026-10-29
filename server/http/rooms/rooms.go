@@ -95,11 +95,7 @@ func (ctx *Context) handleCreateRoom(rw http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	ctx.Rooms.NewRoom(req.Context(), &room.Room{
-		Id:        roomId,
-		PlayerMap: make(map[string]*room.Player, messaging.MAX_PLAYERS),
-		Opts:      opts,
-	})
+	ctx.Rooms.NewRoom(req.Context(), room.NewRoom(roomId, opts))
 	log.Printf("created room %s", roomId)
 	rw.WriteHeader(http.StatusCreated)
 }
@@ -173,6 +169,10 @@ func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
 		r.PlayerMap[playerId] = p
 		log.Printf("%s has joined", playerId)
 	}
+
+	// Update the table record
+	ctx.Rooms.UpdateRoom(req.Context(), r)
+
 	err = c.WriteJSON(messaging.ToPlayerMessage{Type: messaging.MessageTypeHello})
 	if err != nil {
 		// TODO handle
@@ -190,7 +190,7 @@ func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
 			r,
 			errConns)
 	}
-	go listenForPlayerMessages(p, r, c, ctx.Messenger)
+	go listenForPlayerMessages(c, fmt.Sprintf("%s-%s", roomId, playerId), ctx.Rooms, ctx.Messenger)
 }
 
 func handleConnectionErrors(
@@ -236,20 +236,21 @@ func handleConnectionErrors(
 
 // @blocking
 func listenForPlayerMessages(
-	p *room.Player,
-	r *room.Room,
 	pc *websocket.Conn,
+	connId string,
+	rs db.RoomStore,
 	m messaging.Messenger,
 ) {
 	var (
 		msg      messaging.FromPlayerMessage
 		err      error
 		errConns []string
-		connId   = fmt.Sprintf("%s-%s", r.Id, p.Id)
+		r        *room.Room
 	)
 	for {
-		// Clear any previous message
+		// Clear previous state
 		msg = messaging.FromPlayerMessage{}
+		r = nil
 
 		// Read message
 		err = pc.ReadJSON(&msg)
@@ -258,9 +259,17 @@ func listenForPlayerMessages(
 				m.HandleConnectionError(connId)
 				break
 			}
-			log.Printf("error receiving message from %s: %s", p.Id, err.Error())
+			log.Printf("error receiving message: %s. Message: %+v", err.Error(), msg)
 			continue
 		}
+
+		// Could keep a reference to the room as a local variable in the function,
+		// but retrieving and storing the room state each round in order to keep
+		// the server and serverless versions of the app as similar as possible
+		// for testing.
+		// Can ignore error here, though, as in-memory room store cannot return
+		// an error.
+		r, _ = rs.GetRoom(context.Background(), msg.RoomId)
 
 		// Process player action
 		_, err = r.HandleMessageFromPlayer(msg)
@@ -277,7 +286,7 @@ func listenForPlayerMessages(
 					messaging.ToPlayerMessage{
 						Type:        messaging.MessageTypeIllegalAction,
 						TableState:  r.GetObfuscatedTableState(),
-						PlayerState: r.GetPlayerState(p.Id),
+						PlayerState: r.GetPlayerState(msg.PlayerId),
 					})
 				if err != nil {
 					handleConnectionErrors(context.Background(), m, r, []string{connId})
@@ -285,6 +294,9 @@ func listenForPlayerMessages(
 			}
 			continue
 		}
+
+		// Update table state
+		rs.UpdateRoom(context.Background(), r)
 
 		// Broadcast new table state if necessary
 		if msg.Type == messaging.MessageTypeBuyIn ||

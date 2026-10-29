@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"reflect"
 	"time"
 
 	"github.com/alcamerone/joker/hand"
@@ -40,6 +41,44 @@ type State struct {
 	Opts           RoomOpts
 	PlayerMap      map[string]Player
 	GameTableState table.State
+}
+
+func NewRoom(id string, opts RoomOpts) *Room {
+	return &Room{
+		Id:        id,
+		PlayerMap: make(map[string]*Player, messaging.MAX_PLAYERS),
+		Opts:      opts,
+	}
+}
+
+func RehydrateRoom(s State) *Room {
+	pm := make(map[string]*Player)
+	for id, p := range s.PlayerMap {
+		pm[id] = &p
+	}
+
+	var gt *table.Table
+	if !reflect.ValueOf(s.GameTableState).IsZero() {
+		gt = table.NewFromState(
+			// Each round will have cards chosen from the deck using a different random seed,
+			// which is fine. If anything, less easy to predict..?
+			hand.NewDealer(
+				rand.New(
+					randSource.NewConcurrencySafeSource(
+						uint64(time.Now().UnixNano()),
+						uint64(time.Now().UnixNano())+uint64(time.Millisecond),
+					),
+				),
+			),
+			s.GameTableState)
+	}
+
+	return &Room{
+		Id:        s.Id,
+		Opts:      s.Opts,
+		PlayerMap: pm,
+		GameTable: gt,
+	}
 }
 
 func (r *Room) State() State {
@@ -99,6 +138,9 @@ func (r *Room) GetPlayersSittingOut() []string {
 }
 
 func (r *Room) GetPlayerState(playerId string) table.Player {
+	if r.GameTable == nil {
+		return table.Player{}
+	}
 	for _, s := range r.GameTable.Seats() {
 		if s.ID == playerId {
 			return s

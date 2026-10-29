@@ -2,14 +2,9 @@ package db
 
 import (
 	"context"
-	"math/rand/v2"
 	"slices"
-	"time"
 
-	"github.com/alcamerone/joker/hand"
-	"github.com/alcamerone/joker/table"
 	"github.com/alcamerone/pocket2s/server/cmap"
-	"github.com/alcamerone/pocket2s/server/randSource"
 	"github.com/alcamerone/pocket2s/server/room"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -25,32 +20,35 @@ type RoomStore interface {
 }
 
 type InMemoryRoomStore struct {
-	rooms *cmap.ConcurrentMap[string, *room.Room]
+	rooms *cmap.ConcurrentMap[string, room.State]
 }
 
 func NewInMemoryRoomStore() *InMemoryRoomStore {
 	return &InMemoryRoomStore{
-		rooms: cmap.New[string, *room.Room](),
+		rooms: cmap.New[string, room.State](),
 	}
 }
 
 func (s *InMemoryRoomStore) GetRoom(_ context.Context, id string) (*room.Room, error) {
-	room, _ := s.rooms.Get(id)
-	return room, nil
+	state, _ := s.rooms.Get(id)
+	return room.RehydrateRoom(state), nil
 }
 
 func (s *InMemoryRoomStore) GetAllRooms(_ context.Context) ([]*room.Room, error) {
-	return slices.Collect(s.rooms.Values()), nil
+	states := slices.Collect(s.rooms.Values())
+	rooms := make([]*room.Room, len(states))
+	for i := range states {
+		rooms[i] = room.RehydrateRoom(states[i])
+	}
+	return rooms, nil
 }
 
-func (s *InMemoryRoomStore) NewRoom(_ context.Context, room *room.Room) error {
-	s.rooms.Set(room.Id, room)
-	return nil
+func (s *InMemoryRoomStore) NewRoom(ctx context.Context, r *room.Room) error {
+	return s.UpdateRoom(ctx, r)
 }
 
-func (s *InMemoryRoomStore) UpdateRoom(_ context.Context, room *room.Room) error {
-	// Dummy implementation for now
-	// TODO Make rooms immutable
+func (s *InMemoryRoomStore) UpdateRoom(_ context.Context, r *room.Room) error {
+	s.rooms.Set(r.Id, r.State())
 	return nil
 }
 
@@ -88,25 +86,7 @@ func (s *DDBRoomStore) GetRoom(ctx context.Context, id string) (*room.Room, erro
 	if err != nil {
 		return nil, err
 	}
-	pm := make(map[string]*room.Player)
-	for id, p := range state.PlayerMap {
-		pm[id] = &p
-	}
-	return &room.Room{
-		Id:        state.Id,
-		Opts:      state.Opts,
-		PlayerMap: pm,
-		GameTable: table.NewFromState(
-			hand.NewDealer(
-				rand.New(
-					randSource.NewConcurrencySafeSource(
-						uint64(time.Now().UnixNano()),
-						uint64(time.Now().UnixNano())+uint64(time.Millisecond),
-					),
-				),
-			),
-			state.GameTableState),
-	}, nil
+	return room.RehydrateRoom(state), nil
 }
 
 func (s *DDBRoomStore) GetAllRooms(ctx context.Context) ([]*room.Room, error) {
