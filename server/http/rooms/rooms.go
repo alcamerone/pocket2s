@@ -3,7 +3,6 @@ package rooms
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -274,28 +273,27 @@ func listenForPlayerMessages(
 		// Process player action
 		_, err = r.HandleMessageFromPlayer(msg)
 		if err != nil {
-			if errors.Is(err, table.ErrIllegalAction) ||
-				errors.Is(err, table.ErrInsufficientBet) ||
-				errors.Is(err, messaging.ErrInvalidMessageType) {
-				// TODO Add different messages for different errors?
-				connId := fmt.Sprintf("%s-%s", msg.RoomId, msg.PlayerId)
-				err = messaging.SendMessageTo(
-					context.Background(),
-					m,
-					connId,
-					messaging.ToPlayerMessage{
-						Type:        messaging.MessageTypeIllegalAction,
-						TableState:  r.GetObfuscatedTableState(),
-						PlayerState: r.GetPlayerState(msg.PlayerId),
-					})
-				if err != nil {
-					handleConnectionErrors(context.Background(), m, r, []string{connId})
-				}
+			// Only type of error that can be thrown here is some form of illegal action,
+			// e.g. not your turn, invalid action, etc.
+			// TODO Add different messages for different errors?
+			connId := fmt.Sprintf("%s-%s", msg.RoomId, msg.PlayerId)
+			mErr := messaging.SendMessageTo(
+				context.Background(),
+				m,
+				connId,
+				messaging.ToPlayerMessage{
+					Type:        messaging.MessageTypeIllegalAction,
+					TableState:  r.GetObfuscatedTableState(),
+					PlayerState: r.GetPlayerState(msg.PlayerId),
+				})
+			if mErr != nil {
+				handleConnectionErrors(context.Background(), m, r, []string{connId})
+				rs.UpdateRoom(context.Background(), r)
 			}
 			continue
 		}
 
-		// Update table state
+		// Update room state
 		rs.UpdateRoom(context.Background(), r)
 
 		// Broadcast new table state if necessary
@@ -311,6 +309,7 @@ func listenForPlayerMessages(
 			})
 			if errConns != nil {
 				handleConnectionErrors(context.Background(), m, r, errConns)
+				rs.UpdateRoom(context.Background(), r)
 			}
 		}
 		resp := messaging.ToPlayerMessage{
@@ -324,6 +323,7 @@ func listenForPlayerMessages(
 		errConns = broadcast(context.Background(), m, r, resp)
 		if errConns != nil {
 			handleConnectionErrors(context.Background(), m, r, errConns)
+			rs.UpdateRoom(context.Background(), r)
 		}
 	}
 }

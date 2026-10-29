@@ -3,7 +3,6 @@ package ws
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -60,25 +59,31 @@ func handleMessage(msg json.RawMessage) (any, error) {
 	// Process player action
 	_, err = r.HandleMessageFromPlayer(m)
 	if err != nil {
-		if errors.Is(err, table.ErrIllegalAction) || errors.Is(err, table.ErrInsufficientBet) {
-			// TODO Add a new message type for the latter case?
-			connId := fmt.Sprintf("%s-%s", m.RoomId, m.PlayerId)
-			err = messaging.SendMessageTo(
-				context.Background(),
-				msgr,
-				connId,
-				messaging.ToPlayerMessage{
-					Type:        messaging.MessageTypeIllegalAction,
-					TableState:  r.GetObfuscatedTableState(),
-					PlayerState: r.GetPlayerState(m.PlayerId),
-				})
-			if err != nil {
-				handleConnectionErrors(context.Background(), msgr, r, []string{connId})
+		// Only type of error that can be thrown here is some form of illegal action,
+		// e.g. not your turn, invalid action, etc.
+		// TODO Add different messages for different errors?
+		connId := fmt.Sprintf("%s-%s", m.RoomId, m.PlayerId)
+		mErr := messaging.SendMessageTo(
+			context.Background(),
+			msgr,
+			connId,
+			messaging.ToPlayerMessage{
+				Type:        messaging.MessageTypeIllegalAction,
+				TableState:  r.GetObfuscatedTableState(),
+				PlayerState: r.GetPlayerState(m.PlayerId),
+			})
+		if mErr != nil {
+			handleConnectionErrors(context.Background(), msgr, r, []string{connId})
+			rErr := roomStore.UpdateRoom(context.Background(), r)
+			if rErr != nil {
+				log.Printf("Error persisting room state after handling connection errors: %s", err.Error())
 			}
 		}
+		// Don't need to persist room state or send any other messages, so exit early
+		return nil, err
 	}
 
-	// Try to persist room state to ensure it remains consistent with what is broadcast to players
+	// Try to persist room state first to ensure it remains consistent with what is broadcast to players
 	err = roomStore.UpdateRoom(context.Background(), r)
 	if err != nil {
 		log.Printf("Error persisting room state: %s", err.Error())
@@ -86,29 +91,38 @@ func handleMessage(msg json.RawMessage) (any, error) {
 	}
 
 	// Broadcast new table state if necessary
-	resp := messaging.ToPlayerMessage{TableState: r.GetObfuscatedTableState()}
-	if m.Type == messaging.MessageTypePlayerAction {
-		resp.Type = messaging.MessageTypePlayerAction
-		resp.PlayerAction = messaging.PlayerAction{
-			Action:   m.Action,
-			PlayerId: m.PlayerId,
-		}
-	} else {
-		resp.Type = messaging.MessageTypeTableState
-		res := r.GetResultStr()
-		if res != "" {
-			resp.Result = res
-		}
-	}
-	errConns := broadcast(context.Background(), msgr, r, resp)
-	if errConns != nil {
-		handleConnectionErrors(context.Background(), msgr, r, errConns)
+	if m.Type == messaging.MessageTypeBuyIn ||
+		((m.Type == messaging.MessageTypeReady || m.Type == messaging.MessageTypeSitOut) && !r.PlayersAreReady()) {
+		// No need to send table state if we are still waiting for players; exit early
+		return nil, nil
 	}
 
-	// Persist room state again in case any updates are made in response to connection errors
-	err = roomStore.UpdateRoom(context.Background(), r)
-	if err != nil {
-		log.Printf("Error persisting room state after handling connection errors: %s", err.Error())
+	var errConns []string
+	if m.Type == messaging.MessageTypePlayerAction {
+		errConns = broadcast(context.Background(), msgr, r, messaging.ToPlayerMessage{
+			Type:         messaging.MessageTypePlayerAction,
+			PlayerAction: messaging.PlayerAction{Action: m.Action, PlayerId: m.PlayerId},
+		})
+		if errConns != nil {
+			handleConnectionErrors(context.Background(), msgr, r, errConns)
+			roomStore.UpdateRoom(context.Background(), r)
+		}
+	}
+	resp := messaging.ToPlayerMessage{
+		Type:       messaging.MessageTypeTableState,
+		TableState: r.GetObfuscatedTableState(),
+	}
+	res := r.GetResultStr()
+	if res != "" {
+		resp.Result = res
+	}
+	errConns = broadcast(context.Background(), msgr, r, resp)
+	if errConns != nil {
+		handleConnectionErrors(context.Background(), msgr, r, errConns)
+		err = roomStore.UpdateRoom(context.Background(), r)
+		if err != nil {
+			log.Printf("Error persisting room state after handling connection errors: %s", err.Error())
+		}
 	}
 
 	return nil, nil
@@ -131,14 +145,14 @@ func handleConnectionErrors(
 		p.Connected = false
 		p.SittingOut = true
 		r.GameTable.SetPlayerDefaulting(pId, true)
-		r.PlayerMap[pId] = p
 
 		// If the player with the connection error is the currently active player,
 		// send a message on their behalf to fold to prevent the game from soft-locking
 		if r.GameTable.State().ActiveIdx == p.TablePos {
 			r.HandleMessageFromPlayer(messaging.FromPlayerMessage{
-				Type:   messaging.MessageTypePlayerAction,
-				Action: table.Action{Type: table.Fold},
+				PlayerId: pId,
+				Type:     messaging.MessageTypePlayerAction,
+				Action:   table.Action{Type: table.Fold},
 			})
 		}
 
