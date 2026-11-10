@@ -10,16 +10,16 @@ import (
 	"github.com/alcamerone/joker/hand"
 	"github.com/alcamerone/joker/table"
 	"github.com/alcamerone/pocket2s/server/messaging"
-	"github.com/alcamerone/pocket2s/server/randSource"
+	"github.com/alcamerone/pocket2s/server/random"
 )
 
 type Player struct {
-	Id         string
-	TablePos   int
-	Ready      bool
-	SittingOut bool
-	Broke      bool
-	Connected  bool
+	Id           string
+	TablePos     int
+	Ready        bool
+	SittingOut   bool
+	Broke        bool
+	ConnectionId string
 }
 
 type RoomOpts struct {
@@ -34,6 +34,8 @@ type Room struct {
 	Opts      RoomOpts
 	PlayerMap map[string]*Player
 	GameTable *table.Table
+
+	Version int64 `,json:"-"` // Version is used for optimistic locking in e.g. DynamoDB
 }
 
 type State struct {
@@ -41,6 +43,8 @@ type State struct {
 	Opts           RoomOpts
 	PlayerMap      map[string]Player
 	GameTableState table.State
+
+	Version int64 `,json:"-"` // Version is used for optimistic locking in e.g. DynamoDB
 }
 
 func NewRoom(id string, opts RoomOpts) *Room {
@@ -64,7 +68,7 @@ func RehydrateRoom(s State) *Room {
 			// which is fine. If anything, less easy to predict..?
 			hand.NewDealer(
 				rand.New(
-					randSource.NewConcurrencySafeSource(
+					random.NewConcurrencySafeSource(
 						uint64(time.Now().UnixNano()),
 						uint64(time.Now().UnixNano())+uint64(time.Millisecond),
 					),
@@ -124,6 +128,10 @@ func (r *Room) PlayersAreReady() bool {
 func (r *Room) ResetPlayersReady() {
 	for _, p := range r.PlayerMap {
 		p.Ready = false
+		ps := r.GetPlayerState(p.Id)
+		if ps.Chips == 0 {
+			p.Broke = true
+		}
 	}
 }
 
@@ -220,10 +228,21 @@ func (r *Room) GetResultStr() string {
 	return resultStr
 }
 
+func (r *Room) GetPlayerByConnectionId(connId string) *Player {
+	for _, p := range r.PlayerMap {
+		if p.ConnectionId == connId {
+			return p
+		}
+	}
+	return nil
+}
+
 func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, error) {
 	var err error
 	player := r.PlayerMap[msg.PlayerId] // TODO handle player not found? Should this happen up-stream?
 	switch msg.Type {
+	case messaging.MessageTypeHello:
+		// No effect on table state
 	case messaging.MessageTypeReady, messaging.MessageTypeSitOut:
 		isReady := msg.Type == messaging.MessageTypeReady
 		player.Ready = isReady
@@ -250,7 +269,7 @@ func (r *Room) HandleMessageFromPlayer(msg messaging.FromPlayerMessage) (State, 
 				r.GameTable = table.New(
 					hand.NewDealer(
 						rand.New(
-							randSource.NewConcurrencySafeSource(
+							random.NewConcurrencySafeSource(
 								uint64(time.Now().UnixNano()),
 								uint64(time.Now().UnixNano())+uint64(time.Millisecond),
 							),

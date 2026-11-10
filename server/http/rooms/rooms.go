@@ -3,7 +3,7 @@ package rooms
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -12,6 +12,7 @@ import (
 	"github.com/alcamerone/joker/table"
 	"github.com/alcamerone/pocket2s/server/db"
 	"github.com/alcamerone/pocket2s/server/messaging"
+	"github.com/alcamerone/pocket2s/server/random"
 	"github.com/alcamerone/pocket2s/server/room"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
@@ -44,7 +45,20 @@ func setHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// AttachRoomRoutes attaches only /check and /create routes,
+// intended for use with non-WS APIs
 func AttachRoomRoutes(router chi.Router, ctx *Context) {
+	router.Route("/room", func(r chi.Router) {
+		r.Use(setHeaders)
+		r.Get("/check/{roomId}", ctx.handleRoomCheck)
+		r.Post("/create/{roomId}", ctx.handleCreateRoom)
+	})
+}
+
+// AttachRoomRoutesWithConnect attaches the /check and /create routes,
+// as well as /connect, intended for cases where the server handles
+// both room creation and web sockets
+func AttachRoomRoutesWithConnect(router chi.Router, ctx *Context) {
 	router.Route("/room", func(r chi.Router) {
 		r.Use(setHeaders)
 		r.Get("/check/{roomId}", ctx.handleRoomCheck)
@@ -55,13 +69,15 @@ func AttachRoomRoutes(router chi.Router, ctx *Context) {
 
 func (ctx *Context) handleRoomCheck(rw http.ResponseWriter, req *http.Request) {
 	roomId := chi.URLParam(req, "roomId")
-	r, err := ctx.Rooms.GetRoom(req.Context(), roomId)
-	if err != nil {
-		rw.WriteHeader(http.StatusInternalServerError)
+	_, err := ctx.Rooms.GetRoom(req.Context(), roomId)
+	if err == nil {
+		// Room exists, return Conflict
+		rw.WriteHeader(http.StatusConflict)
 		return
 	}
-	if r != nil {
-		rw.WriteHeader(http.StatusConflict)
+	if !errors.Is(err, db.ErrRoomNotFound) {
+		log.Printf("Error checking for existence of room %s: %s", roomId, err.Error())
+		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	rw.WriteHeader(http.StatusOK)
@@ -69,14 +85,16 @@ func (ctx *Context) handleRoomCheck(rw http.ResponseWriter, req *http.Request) {
 
 func (ctx *Context) handleCreateRoom(rw http.ResponseWriter, req *http.Request) {
 	roomId := chi.URLParam(req, "roomId")
-	r, err := ctx.Rooms.GetRoom(req.Context(), roomId)
-	if err != nil {
-		rw.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	if r != nil {
-		log.Printf("error: a room named %s already exists", r.Id)
+	_, err := ctx.Rooms.GetRoom(req.Context(), roomId)
+	if err == nil {
+		log.Printf("Error: a room named %s already exists", roomId)
 		rw.WriteHeader(http.StatusConflict)
+		return
+
+	}
+	if !errors.Is(err, db.ErrRoomNotFound) {
+		log.Printf("Error checking for existence of room %s: %s", roomId, err.Error())
+		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
@@ -94,7 +112,17 @@ func (ctx *Context) handleCreateRoom(rw http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	ctx.Rooms.NewRoom(req.Context(), room.NewRoom(roomId, opts))
+	err = ctx.Rooms.NewRoom(req.Context(), room.NewRoom(roomId, opts))
+	if err != nil {
+		if errors.Is(err, db.ErrRoomExists) {
+			log.Printf("Error: a room named %s already exists", roomId)
+			rw.WriteHeader(http.StatusConflict)
+			return
+		}
+		log.Printf("Error trying to create room %s: %s", roomId, err.Error())
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	log.Printf("created room %s", roomId)
 	rw.WriteHeader(http.StatusCreated)
 }
@@ -115,14 +143,13 @@ func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
 
 	playerId := chi.URLParam(req, "playerId")
 
+	connId := random.RandomString(9)
 	p, playerExists := r.PlayerMap[playerId]
 	if playerExists {
 		// Get the player's connection.
 		// If the connection does not exist, continue to reconnect the player.
 		// Otherwise, reject the request.
-		cExists, err := ctx.Messenger.ConnectionExists(
-			context.Background(),
-			fmt.Sprintf("%s-%s", r.Id, playerId))
+		cExists, err := ctx.Messenger.ConnectionExists(req.Context(), connId)
 		if err != nil {
 			log.Printf("error determining if connection exists for player %s in room %s: %s",
 				r.Id,
@@ -152,18 +179,18 @@ func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	// Store the new connection
-	ctx.Messenger.NewConnection(fmt.Sprintf("%s-%s", r.Id, playerId), c)
+	ctx.Messenger.NewConnection(req.Context(), connId, roomId, playerId, c)
 	if playerExists {
-		p.Connected = true
+		p.ConnectionId = connId
 		p.Ready = false
 		p.SittingOut = true
 		log.Printf("%s has rejoined", playerId)
 	} else {
 		tablePos := len(r.PlayerMap)
 		p = &room.Player{
-			Id:        playerId,
-			TablePos:  tablePos,
-			Connected: true,
+			Id:           playerId,
+			TablePos:     tablePos,
+			ConnectionId: connId,
 		}
 		r.PlayerMap[playerId] = p
 		log.Printf("%s has joined", playerId)
@@ -178,18 +205,14 @@ func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
 		log.Printf("error sending \"hello\" message to player: %s", err.Error())
 	}
 
-	errConns := broadcast(context.Background(), ctx.Messenger, r, messaging.ToPlayerMessage{
+	errConns := broadcast(req.Context(), ctx.Messenger, r, messaging.ToPlayerMessage{
 		Type:     messaging.MessageTypePlayerConnected,
 		PlayerId: playerId,
 	})
 	if errConns != nil {
-		handleConnectionErrors(
-			context.Background(),
-			ctx.Messenger,
-			r,
-			errConns)
+		handleConnectionErrors(req.Context(), ctx.Messenger, r, errConns)
 	}
-	go listenForPlayerMessages(c, fmt.Sprintf("%s-%s", roomId, playerId), ctx.Rooms, ctx.Messenger)
+	go listenForPlayerMessages(c, connId, ctx.Rooms, ctx.Messenger)
 }
 
 func handleConnectionErrors(
@@ -206,7 +229,7 @@ func handleConnectionErrors(
 
 		// Mark player disconnected
 		p := r.PlayerMap[pId]
-		p.Connected = false
+		p.ConnectionId = ""
 		p.SittingOut = true
 		r.GameTable.SetPlayerDefaulting(pId, true)
 
@@ -219,6 +242,9 @@ func handleConnectionErrors(
 				Action:   table.Action{Type: table.Fold},
 			})
 		}
+
+		// Clean up connection
+		m.HandleConnectionError(ctx, p.ConnectionId)
 
 		// Broadcast player disconnected state
 		bErrConns := broadcast(ctx, m, r, messaging.ToPlayerMessage{
@@ -255,20 +281,20 @@ func listenForPlayerMessages(
 		err = pc.ReadJSON(&msg)
 		if err != nil {
 			if m.IsClosedConnectionError(err) {
-				m.HandleConnectionError(connId)
+				m.HandleConnectionError(context.Background(), connId)
 				break
 			}
 			log.Printf("error receiving message: %s. Message: %+v", err.Error(), msg)
 			continue
 		}
 
-		// Could keep a reference to the room as a local variable in the function,
-		// but retrieving and storing the room state each round in order to keep
-		// the server and serverless versions of the app as similar as possible
-		// for testing.
-		// Can ignore error here, though, as in-memory room store cannot return
-		// an error.
-		r, _ = rs.GetRoom(context.Background(), msg.RoomId)
+		// Retrieve room
+		r, err = rs.GetRoom(context.Background(), msg.RoomId)
+		if err != nil {
+			// Room no longer exists, close the connection and end
+			m.HandleConnectionError(context.Background(), connId)
+			break
+		}
 
 		// Process player action
 		_, err = r.HandleMessageFromPlayer(msg)
@@ -276,7 +302,6 @@ func listenForPlayerMessages(
 			// Only type of error that can be thrown here is some form of illegal action,
 			// e.g. not your turn, invalid action, etc.
 			// TODO Add different messages for different errors?
-			connId := fmt.Sprintf("%s-%s", msg.RoomId, msg.PlayerId)
 			mErr := messaging.SendMessageTo(
 				context.Background(),
 				m,
@@ -340,30 +365,25 @@ func broadcast(
 	r *room.Room,
 	msg messaging.ToPlayerMessage,
 ) (errConns []string) {
-	var (
-		connId string
-		err    error
-	)
+	var err error
 
 	for _, p := range r.PlayerMap {
-		if p.Connected {
+		if p.ConnectionId != "" {
 			if msg.Type == messaging.MessageTypeTableState {
 				msg.PlayerState = r.GetPlayerState(p.Id)
 				if msg.PlayerState.Chips == 0 && r.GameTable.State().Status == table.Done {
 					p.Broke = true
 				}
 			}
-			connId = fmt.Sprintf("%s-%s", r.Id, p.Id)
-			err = messaging.SendMessageTo(ctx, m, connId, msg)
+			err = messaging.SendMessageTo(ctx, m, p.ConnectionId, msg)
 			if err != nil {
 				log.Printf(
 					"giving up sending state to connection %s due to too many errors",
-					connId)
-				m.HandleConnectionError(connId)
+					p.ConnectionId)
 				if errConns == nil {
-					errConns = []string{connId}
+					errConns = []string{p.ConnectionId}
 				} else {
-					errConns = append(errConns, connId)
+					errConns = append(errConns, p.ConnectionId)
 				}
 			}
 		}

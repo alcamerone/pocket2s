@@ -67,7 +67,11 @@ export default class ControlBar extends Component {
 					<button
 						style={{ height: "33%", width: "19%", margin: "auto" }}
 						onClick={() => {
-							this.sendAction({ Type: MSG_TYPE_BUY_IN }, this.props.conn);
+							this.sendAction({
+								Type: MSG_TYPE_BUY_IN,
+								PlayerId: this.props.player.ID,
+								RoomId: this.props.tableId,
+							}, this.props.conn);
 							this.setState({ ready: true });
 						}}
 					>
@@ -89,7 +93,11 @@ export default class ControlBar extends Component {
 					<button
 						style={{ height: "33%", width: "10%", margin: "auto" }}
 						onClick={() => {
-							this.sendAction({ Type: MSG_TYPE_READY }, this.props.conn);
+							this.sendAction({
+								Type: MSG_TYPE_READY,
+								PlayerId: this.props.player.ID,
+								RoomId: this.props.tableId
+							}, this.props.conn);
 							this.setState({ ready: true });
 						}}
 					>
@@ -133,6 +141,8 @@ export default class ControlBar extends Component {
 							this.sendAction(
 								{
 									Type: MSG_TYPE_PLAYER_ACTION,
+									PlayerId: this.props.player.ID,
+									RoomId: this.props.tableId,
 									Action: { Type: ACTION_FOLD }
 								},
 								this.props.conn
@@ -150,6 +160,8 @@ export default class ControlBar extends Component {
 							this.sendAction(
 								{
 									Type: MSG_TYPE_PLAYER_ACTION,
+									PlayerId: this.props.player.ID,
+									RoomId: this.props.tableId,
 									Action: {
 										Type:
 											this.props.table.Owed !== 0
@@ -183,6 +195,8 @@ export default class ControlBar extends Component {
 							this.sendAction(
 								{
 									Type: MSG_TYPE_PLAYER_ACTION,
+									PlayerId: this.props.player.ID,
+									RoomId: this.props.tableId,
 									Action: {
 										Type:
 											this.props.table.Owed !== 0
@@ -220,6 +234,8 @@ export default class ControlBar extends Component {
 						this.sendAction(
 							{
 								Type: MSG_TYPE_PLAYER_ACTION,
+								PlayerId: this.props.player.ID,
+								RoomId: this.props.tableId,
 								Action: { Type: ACTION_ALLIN }
 							},
 							this.props.conn

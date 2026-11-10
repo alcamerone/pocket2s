@@ -16,12 +16,15 @@
  *    along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package randSource
+package random
 
 import (
 	"math/rand/v2"
+	"strings"
 	"sync"
 )
+
+var charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789="
 
 type ConcurrencySafeSource struct {
 	r *rand.Rand
@@ -36,4 +39,13 @@ func (s *ConcurrencySafeSource) Uint64() uint64 {
 	s.m.Lock()
 	defer s.m.Unlock()
 	return s.r.Uint64()
+}
+
+func RandomString(length int) string {
+	sb := &strings.Builder{}
+	sb.Grow(length)
+	for range length {
+		sb.WriteByte(charset[rand.IntN(len(charset))])
+	}
+	return sb.String()
 }

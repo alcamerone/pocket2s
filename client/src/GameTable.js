@@ -16,6 +16,8 @@ const intToDollars = (i) => {
 	return `$${dollars.toFixed(2)}`;
 };
 
+let tableId = window.Location.pathname.substr(1, pathname.lastIndexOf("/") - 1)
+
 export default class GameTable extends Component {
 	constructor(props) {
 		super(props);
@@ -32,7 +34,6 @@ export default class GameTable extends Component {
 
 	componentDidMount() {
 		const { pathname } = window.location;
-		const tableId = pathname.substr(1, pathname.lastIndexOf("/") - 1);
 		const playerId = pathname.substr(pathname.lastIndexOf("/") + 1);
 		// TODO config
 		const conn = new WebSocket(`${config.hostUrl}/connect/${tableId}/${playerId}`);
@@ -260,6 +261,7 @@ export default class GameTable extends Component {
 				</table>
 				<ControlBar
 					connected={this.state.connected}
+					tableId={this.state.tableId}
 					table={this.state.table}
 					player={this.state.player}
 					conn={this.state.conn}

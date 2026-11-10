@@ -21,7 +21,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -76,7 +75,7 @@ func main() {
 	router := chi.NewRouter()
 	router.Use(cancelSelfDestructMiddleware)
 	router.Get("/healthcheck", handleHealthcheck)
-	rooms.AttachRoomRoutes(router, roomsCtx)
+	rooms.AttachRoomRoutesWithConnect(router, roomsCtx)
 
 	go func() {
 		// Periodically check for empty rooms and close them if found
@@ -88,12 +87,9 @@ func main() {
 			allRooms, _ := roomStore.GetAllRooms(context.Background())
 		roomLoop:
 			for _, r := range allRooms {
-				var ok bool
-				for _, p := range r.PlayerMap {
-					if _, ok = messenger.Connections()[fmt.Sprintf("%s-%s", r.Id, p.Id)]; ok {
-						// This room has an active connection, continue to the next one
-						continue roomLoop
-					}
+				if messenger.ConnectionExistsForRoom(r.Id) {
+					// This room has an active connection, continue to the next one
+					continue roomLoop
 				}
 				select {
 				case <-cancelSelfDestructChs[r.Id]:

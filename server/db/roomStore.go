@@ -2,13 +2,22 @@ package db
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strconv"
 
 	"github.com/alcamerone/pocket2s/server/cmap"
 	"github.com/alcamerone/pocket2s/server/room"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbTypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+)
+
+var (
+	ErrRoomNotFound    = errors.New("db: no room found for provided ID")
+	ErrRoomExists      = errors.New("db: room already exists")
+	ErrVersionConflict = errors.New("db: attempted to write a stale room state")
 )
 
 type RoomStore interface {
@@ -30,7 +39,10 @@ func NewInMemoryRoomStore() *InMemoryRoomStore {
 }
 
 func (s *InMemoryRoomStore) GetRoom(_ context.Context, id string) (*room.Room, error) {
-	state, _ := s.rooms.Get(id)
+	state, ok := s.rooms.Get(id)
+	if !ok {
+		return nil, ErrRoomNotFound
+	}
 	return room.RehydrateRoom(state), nil
 }
 
@@ -80,9 +92,12 @@ func (s *DDBRoomStore) GetRoom(ctx context.Context, id string) (*room.Room, erro
 	if err != nil {
 		return nil, err
 	}
+	if resp.Item == nil {
+		return nil, ErrRoomNotFound
+	}
 
 	var state room.State
-	err = attributevalue.UnmarshalMap(resp.Item, &s)
+	err = attributevalue.UnmarshalMap(resp.Item, &state)
 	if err != nil {
 		return nil, err
 	}
@@ -95,20 +110,51 @@ func (s *DDBRoomStore) GetAllRooms(ctx context.Context) ([]*room.Room, error) {
 }
 
 func (s *DDBRoomStore) NewRoom(ctx context.Context, r *room.Room) error {
-	// Both use dynamodbClient.PutItem underneath
-	return s.UpdateRoom(ctx, r)
-}
-
-func (s *DDBRoomStore) UpdateRoom(ctx context.Context, r *room.Room) error {
 	ddbItem, err := attributevalue.MarshalMap(r.State())
 	if err != nil {
 		return err
 	}
 	_, err = s.ddbClient.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: &s.tableName,
-		Item:      ddbItem,
+		TableName:                &s.tableName,
+		Item:                     ddbItem,
+		ConditionExpression:      aws.String("attribute_not_exists(#id)"),
+		ExpressionAttributeNames: map[string]string{"#id": "Id"},
 	})
-	return err
+	if err != nil {
+		if _, isConditionalCheckFailedException := errors.AsType[*ddbTypes.ConditionalCheckFailedException](err); isConditionalCheckFailedException {
+			return ErrRoomExists
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *DDBRoomStore) UpdateRoom(ctx context.Context, r *room.Room) error {
+	rState := r.State()
+	curr := rState.Version
+	rState.Version += 1
+	ddbItem, err := attributevalue.MarshalMap(rState)
+	if err != nil {
+		return err
+	}
+	_, err = s.ddbClient.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:                &s.tableName,
+		Item:                     ddbItem,
+		ConditionExpression:      aws.String("#v = :curr"),
+		ExpressionAttributeNames: map[string]string{"#v": "Version"},
+		ExpressionAttributeValues: map[string]ddbTypes.AttributeValue{
+			":curr": &ddbTypes.AttributeValueMemberN{Value: strconv.FormatInt(curr, 10)},
+		},
+	})
+	if err != nil {
+		if _, isConditionalCheckFailedException := errors.AsType[*ddbTypes.ConditionalCheckFailedException](err); isConditionalCheckFailedException {
+			return ErrVersionConflict
+		}
+		return err
+	}
+	// Update on source room for future writes
+	r.Version += 1
+	return nil
 }
 
 func (s *DDBRoomStore) DeleteRoom(ctx context.Context, id string) error {
