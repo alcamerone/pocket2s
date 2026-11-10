@@ -31,7 +31,7 @@ export default class ControlBar extends Component {
 		if (
 			this.props.table &&
 			this.props.table.Status === TABLE_STATUS_DONE &&
-			prevProps.table.Status !== TABLE_STATUS_DONE
+			(!prevProps.table || prevProps.table.Status !== TABLE_STATUS_DONE)
 		) {
 			this.setState({ ready: false });
 		}
@@ -75,7 +75,7 @@ export default class ControlBar extends Component {
 							this.setState({ ready: true });
 						}}
 					>
-						{`BUY IN ($${intToDollars(this.props.table.Options.Buyin)})`}
+						{`BUY IN (${intToDollars(this.props.table.Options.Buyin)})`}
 					</button>
 				</div>
 			);
@@ -228,25 +228,23 @@ export default class ControlBar extends Component {
 					/>
 					<input type="text" value={intToDollars(this.state.bet)} disabled />
 				</div>
-				<div
-					style={{ height: "100%", width: "25%", display: "inline-block" }}
-					onClick={() =>
-						this.sendAction(
-							{
-								Type: MSG_TYPE_PLAYER_ACTION,
-								PlayerId: this.props.player.ID,
-								RoomId: this.props.tableId,
-								Action: { Type: ACTION_ALLIN }
-							},
-							this.props.conn
-						)
-					}
-				>
+				<div style={{ height: "100%", width: "25%", display: "inline-block" }}>
 					<button
 						disabled={
 							!myTurn || this.props.table.Owed > this.props.player.Chips
 						}
 						style={{ height: "33%", width: "66%", margin: "auto" }}
+						onClick={() =>
+							this.sendAction(
+								{
+									Type: MSG_TYPE_PLAYER_ACTION,
+									PlayerId: this.props.player.ID,
+									RoomId: this.props.tableId,
+									Action: { Type: ACTION_ALLIN }
+								},
+								this.props.conn
+							)
+						}
 					>
 						ALL IN
 					</button>

@@ -35,6 +35,7 @@ const (
 	MessageTypeIllegalAction
 	MessageTypePlayerConnected
 	MessageTypePlayerDisconnected
+	MessageTypePing
 )
 
 type FromPlayerMessage struct {

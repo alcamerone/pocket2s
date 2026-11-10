@@ -229,6 +229,12 @@ func handleMessage(
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusBadRequest}, nil
 	}
 
+	// Ping messages are used to prevent APIGW WS connections from idling out,
+	// otherwise they will disconnect after 10 minutes
+	if m.Type == messaging.MessageTypePing {
+		return successResponse, nil
+	}
+
 	// Get room and player ID from connection ID
 	connId := ev.RequestContext.ConnectionID
 	roomId, playerId, err := messenger.GetRoomAndPlayerByConnectionId(ctx, connId)
