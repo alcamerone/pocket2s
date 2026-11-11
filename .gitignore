@@ -2,3 +2,6 @@
 scripts/*
 *.vscode
 .claude
+infrastructure/.terraform/*
+infrastructure/lambda/*
+*.plan
