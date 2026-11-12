@@ -67,7 +67,7 @@ export default class GameTable extends Component {
 	connect() {
 		const { tableId, playerId } = this.state;
 		// TODO config
-		const conn = new WebSocket(`${config.hostUrl}/connect/${tableId}/${playerId}`);
+		const conn = new WebSocket(`${config.hostUrl}?roomId=${tableId}&playerId=${playerId}`);
 		conn.onopen = () => {
 			this.setState({ error: null });
 			conn.send(JSON.stringify({ Type: MSG_TYPE_HELLO, RoomId: tableId, PlayerId: playerId }));

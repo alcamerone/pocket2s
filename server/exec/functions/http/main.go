@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -66,6 +67,8 @@ func (rw *APIGatewayV2HTTPResponseWriter) GetResponse() (events.APIGatewayV2HTTP
 }
 
 func handler(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+	log.Printf("Host: %s Path: %s", req.RequestContext.DomainName, req.RawPath)
+
 	// Convert the incoming request to a http.Request
 	body := []byte(req.Body)
 	if req.IsBase64Encoded {
@@ -112,6 +115,7 @@ func main() {
 	// Create a router and attach the routes as in the server program
 	roomsCtx := &rooms.Context{Rooms: roomStore}
 	router = chi.NewRouter()
+	router.Use(middleware.Logger)
 	rooms.AttachRoomRoutes(router, roomsCtx)
 
 	lambda.Start(handler)

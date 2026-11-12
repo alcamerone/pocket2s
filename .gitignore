@@ -5,3 +5,7 @@ scripts/*
 infrastructure/.terraform/*
 infrastructure/lambda/*
 *.plan
+*tfstate*
+*/node_modules
+client/build
+landing/build
