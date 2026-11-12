@@ -6,6 +6,10 @@ variable "stage" {
     type = string
 }
 
+variable "pocket2s_zone_id" {
+    type = string
+}
+
 provider "aws" {
     region = var.region
 }
@@ -13,11 +17,6 @@ provider "aws" {
 # Lambdas and associated resources
 resource "aws_s3_bucket" "lambdas_bucket" {
     bucket = "pocket2s-lambda-code-bucket"
-}
-
-resource "aws_s3_bucket_acl" "lambdas_bucket_acl" {
-    bucket = aws_s3_bucket.lambdas_bucket.id
-    acl = "private"
 }
 
 resource "aws_s3_bucket_versioning" "lambdas_bucket_versioning" {
@@ -149,6 +148,12 @@ resource "aws_lambda_function" "http_handler" {
     architectures = ["arm64"]
     runtime = "provided.al2023"
     handler = "bootstrap"
+
+    environment {
+      variables = {
+        "DDB_ROOM_STATE_TABLE" = aws_dynamodb_table.room_state.name
+      }
+    }
 }
 
 resource "aws_lambda_function" "ws_handler" {
@@ -159,6 +164,14 @@ resource "aws_lambda_function" "ws_handler" {
     architectures = ["arm64"]
     runtime = "provided.al2023"
     handler = "bootstrap"
+
+     environment {
+      variables = {
+        "DDB_ROOM_STATE_TABLE" = aws_dynamodb_table.room_state.name
+        "DDB_CONN_TO_ROOM_PLAYER_TABLE" = aws_dynamodb_table.conn_room_player_mapping.name
+        "AWS_APIGW_WS_ENDPOINT" = "${aws_apigatewayv2_api.ws_api.api_endpoint}/${var.stage}"
+      }
+    }
 }
 
 # WS API
@@ -177,7 +190,7 @@ resource "aws_apigatewayv2_integration" "ws_integration" {
     integration_type = "AWS_PROXY"
 
     integration_uri = aws_lambda_function.ws_handler.invoke_arn
-    integration_method = "ANY"
+    integration_method = "POST"
 }
 
 resource "aws_apigatewayv2_route" "connect" {
@@ -201,6 +214,44 @@ resource "aws_apigatewayv2_route" "default" {
     target = "integrations/${aws_apigatewayv2_integration.ws_integration.id}"
 }
 
+resource "aws_acm_certificate" "ws_api" {
+    domain_name = "ws.pocket2s.com"
+    validation_method = "DNS"
+
+    lifecycle {
+      create_before_destroy = true
+    }
+}
+
+resource "aws_apigatewayv2_domain_name" "ws_api" {
+    domain_name = "ws.pocket2s.com"
+    routing_mode = "API_MAPPING_ONLY"
+
+    domain_name_configuration {
+      certificate_arn = aws_acm_certificate.ws_api.arn
+      endpoint_type = "REGIONAL"
+      security_policy = "TLS_1_2"
+    }
+}
+
+resource "aws_apigatewayv2_api_mapping" "ws_api" {
+    api_id = aws_apigatewayv2_api.ws_api.id
+    domain_name = aws_apigatewayv2_domain_name.ws_api.id
+    stage = aws_apigatewayv2_stage.ws_api_prod.id
+}
+
+resource "aws_route53_record" "ws_api" {
+    name = aws_apigatewayv2_domain_name.ws_api.domain_name
+    type = "A"
+    zone_id = var.pocket2s_zone_id
+
+    alias {
+      name = aws_apigatewayv2_domain_name.ws_api.domain_name_configuration[0].target_domain_name
+      zone_id = aws_apigatewayv2_domain_name.ws_api.domain_name_configuration[0].hosted_zone_id
+      evaluate_target_health = false
+    }
+}
+
 # HTTP API
 resource "aws_apigatewayv2_api" "http_api" {
     name = "Pocket2sHttpApi"
@@ -220,16 +271,16 @@ resource "aws_apigatewayv2_stage" "http_api_prod" {
 }
 
 resource "aws_apigatewayv2_integration" "http_integration" {
-    api_id = aws_apigatewayv2_api.ws_api.id
+    api_id = aws_apigatewayv2_api.http_api.id
     integration_type = "AWS_PROXY"
 
     integration_uri = aws_lambda_function.http_handler.invoke_arn
-    integration_method = "ANY"
+    integration_method = "POST"
 }
 
 resource "aws_apigatewayv2_route" "http_default" {
     api_id = aws_apigatewayv2_api.http_api.id
-    route_key = "$default"
+    route_key = "ANY /{proxy+}"
 
     target = "integrations/${aws_apigatewayv2_integration.http_integration.id}"
 }
@@ -237,6 +288,7 @@ resource "aws_apigatewayv2_route" "http_default" {
 # DynamoDB Tables
 resource "aws_dynamodb_table" "room_state" {
     name = "Pocket2sRoomState"
+    billing_mode = "PAY_PER_REQUEST"
     hash_key = "Id"
 
     attribute {
@@ -247,10 +299,49 @@ resource "aws_dynamodb_table" "room_state" {
 
 resource "aws_dynamodb_table" "conn_room_player_mapping" {
     name = "Pocket2s_Conn-Room-Player_Mapping"
+    billing_mode = "PAY_PER_REQUEST"
     hash_key = "ConnectionId"
 
     attribute {
       name = "ConnectionId"
       type = "S"
+    }
+}
+
+resource "aws_acm_certificate" "http_api" {
+    domain_name = "api.pocket2s.com"
+    validation_method = "DNS"
+
+    lifecycle {
+      create_before_destroy = true
+    }
+}
+
+resource "aws_apigatewayv2_domain_name" "http_api" {
+    domain_name = "api.pocket2s.com"
+    routing_mode = "API_MAPPING_ONLY"
+
+    domain_name_configuration {
+      certificate_arn = aws_acm_certificate.http_api.arn
+      endpoint_type = "REGIONAL"
+      security_policy = "TLS_1_2"
+    }
+}
+
+resource "aws_apigatewayv2_api_mapping" "http_api" {
+    api_id = aws_apigatewayv2_api.http_api.id
+    domain_name = aws_apigatewayv2_domain_name.http_api.id
+    stage = aws_apigatewayv2_stage.http_api_prod.id
+}
+
+resource "aws_route53_record" "http_api" {
+    name = aws_apigatewayv2_domain_name.http_api.domain_name
+    type = "A"
+    zone_id = var.pocket2s_zone_id
+
+    alias {
+      name = aws_apigatewayv2_domain_name.http_api.domain_name_configuration[0].target_domain_name
+      zone_id = aws_apigatewayv2_domain_name.http_api.domain_name_configuration[0].hosted_zone_id
+      evaluate_target_health = false
     }
 }
