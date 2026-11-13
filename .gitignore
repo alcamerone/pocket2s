@@ -4,7 +4,7 @@ scripts/*
 .claude
 infrastructure/.terraform/*
 infrastructure/lambda/*
-*.plan
+*.tfplan
 *tfstate*
 */node_modules
 client/build

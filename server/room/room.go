@@ -44,7 +44,8 @@ type State struct {
 	PlayerMap      map[string]Player
 	GameTableState table.State
 
-	Version int64 `,json:"-"` // Version is used for optimistic locking in e.g. DynamoDB
+	Version   int64 `,json:"-"` // Version is used for optimistic locking in e.g. DynamoDB
+	ExpiresAt int64
 }
 
 func NewRoom(id string, opts RoomOpts) *Room {

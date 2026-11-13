@@ -432,6 +432,11 @@ resource "aws_dynamodb_table" "room_state" {
       name = "Id"
       type = "S"
     }
+
+    ttl {
+      enabled = true
+      attribute_name = "ExpiresAt"
+    }
 }
 
 resource "aws_dynamodb_table" "conn_room_player_mapping" {
@@ -442,5 +447,10 @@ resource "aws_dynamodb_table" "conn_room_player_mapping" {
     attribute {
       name = "ConnectionId"
       type = "S"
+    }
+
+    ttl {
+      enabled = true
+      attribute_name = "ExpiresAt"
     }
 }
