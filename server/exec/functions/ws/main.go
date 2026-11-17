@@ -400,21 +400,23 @@ func handleConnectionErrors(
 			// Mark player disconnected
 			p.ConnectionId = ""
 			p.SittingOut = true
-			r.GameTable.SetPlayerDefaulting(p.Id, true)
-
-			// If the player with the connection error is the currently active player,
-			// send a message on their behalf to fold to prevent the game from soft-locking
 			folded := false
-			if r.GameTable.State().ActiveIdx == p.TablePos {
-				_, fErr := r.HandleMessageFromPlayer(messaging.FromPlayerMessage{
-					PlayerId: p.Id,
-					Type:     messaging.MessageTypePlayerAction,
-					Action:   table.Action{Type: table.Fold},
-				})
-				// Ignore error case; if the fold is an illegal action, it shouldn't have happened,
-				// i.e. system is working as it should
-				if fErr == nil {
-					folded = true
+			if r.GameTable != nil {
+				r.GameTable.SetPlayerDefaulting(p.Id, true)
+
+				// If the player with the connection error is the currently active player,
+				// send a message on their behalf to fold to prevent the game from soft-locking
+				if r.GameTable.State().ActiveIdx == p.TablePos {
+					_, fErr := r.HandleMessageFromPlayer(messaging.FromPlayerMessage{
+						PlayerId: p.Id,
+						Type:     messaging.MessageTypePlayerAction,
+						Action:   table.Action{Type: table.Fold},
+					})
+					// Ignore error case; if the fold is an illegal action, it shouldn't have happened,
+					// i.e. system is working as it should
+					if fErr == nil {
+						folded = true
+					}
 				}
 			}
 

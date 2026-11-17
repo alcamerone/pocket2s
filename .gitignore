@@ -2,3 +2,10 @@
 scripts/*
 *.vscode
 .claude
+infrastructure/.terraform/*
+infrastructure/lambda/*
+*.tfplan
+*tfstate*
+*/node_modules
+client/build
+landing/build

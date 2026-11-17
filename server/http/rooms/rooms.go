@@ -231,16 +231,18 @@ func handleConnectionErrors(
 		p := r.PlayerMap[pId]
 		p.ConnectionId = ""
 		p.SittingOut = true
-		r.GameTable.SetPlayerDefaulting(pId, true)
+		if r.GameTable != nil {
+			r.GameTable.SetPlayerDefaulting(pId, true)
 
-		// If the player with the connection error is the currently active player,
-		// send a message on their behalf to fold to prevent the game from soft-locking
-		if r.GameTable.State().ActiveIdx == p.TablePos {
-			r.HandleMessageFromPlayer(messaging.FromPlayerMessage{
-				PlayerId: pId,
-				Type:     messaging.MessageTypePlayerAction,
-				Action:   table.Action{Type: table.Fold},
-			})
+			// If the player with the connection error is the currently active player,
+			// send a message on their behalf to fold to prevent the game from soft-locking
+			if r.GameTable.State().ActiveIdx == p.TablePos {
+				r.HandleMessageFromPlayer(messaging.FromPlayerMessage{
+					PlayerId: pId,
+					Type:     messaging.MessageTypePlayerAction,
+					Action:   table.Action{Type: table.Fold},
+				})
+			}
 		}
 
 		// Clean up connection

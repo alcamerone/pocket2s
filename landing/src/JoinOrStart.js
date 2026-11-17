@@ -69,7 +69,7 @@ export default class JoinOrStart extends Component {
 			this.setState({ errorCreateRoomPlayerName, errorCreateRoomName });
 			return;
 		}
-		fetch(`${config.apiUrl}/create/${this.state.createRoomName}`, {
+		fetch(`${config.apiUrl}/room/create/${this.state.createRoomName}`, {
 			method: "POST",
 			mode: "cors",
 			headers: {

@@ -43,7 +43,7 @@ export default class ControlBar extends Component {
 
 	render() {
 		const myTurn = this.props.table
-			? this.props.table.Active.ID === this.props.player.ID
+			? this.props.table.Seats[this.props.table.ActiveIdx].ID === this.props.player.ID
 			: false;
 
 		if (!this.props.connected) {
@@ -95,7 +95,7 @@ export default class ControlBar extends Component {
 						onClick={() => {
 							this.sendAction({
 								Type: MSG_TYPE_READY,
-								PlayerId: this.props.player.ID,
+								PlayerId: this.props.playerId,
 								RoomId: this.props.tableId
 							}, this.props.conn);
 							this.setState({ ready: true });

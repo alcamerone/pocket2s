@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/alcamerone/pocket2s/server/cmap"
 	"github.com/alcamerone/pocket2s/server/room"
@@ -110,7 +111,9 @@ func (s *DDBRoomStore) GetAllRooms(ctx context.Context) ([]*room.Room, error) {
 }
 
 func (s *DDBRoomStore) NewRoom(ctx context.Context, r *room.Room) error {
-	ddbItem, err := attributevalue.MarshalMap(r.State())
+	rs := r.State()
+	rs.ExpiresAt = time.Now().Add(3 * time.Hour).Unix()
+	ddbItem, err := attributevalue.MarshalMap(rs)
 	if err != nil {
 		return err
 	}
@@ -133,6 +136,7 @@ func (s *DDBRoomStore) UpdateRoom(ctx context.Context, r *room.Room) error {
 	rState := r.State()
 	curr := rState.Version
 	rState.Version += 1
+	rState.ExpiresAt = time.Now().Add(3 * time.Hour).Unix()
 	ddbItem, err := attributevalue.MarshalMap(rState)
 	if err != nil {
 		return err
