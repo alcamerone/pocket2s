@@ -3,7 +3,8 @@ scripts/*
 *.vscode
 .claude
 infrastructure/.terraform/*
-infrastructure/lambda/*
+infrastructure/lambda/http
+infrastructure/lambda/ws
 *.tfplan
 *tfstate*
 */node_modules
