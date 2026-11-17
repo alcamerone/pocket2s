@@ -83,6 +83,7 @@ func RehydrateRoom(s State) *Room {
 		Opts:      s.Opts,
 		PlayerMap: pm,
 		GameTable: gt,
+		Version:   s.Version,
 	}
 }
 
@@ -96,6 +97,7 @@ func (r *Room) State() State {
 		Opts:           r.Opts,
 		PlayerMap:      pm,
 		GameTableState: r.GameTable.State(),
+		Version:        r.Version,
 	}
 }
 

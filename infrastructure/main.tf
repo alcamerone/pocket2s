@@ -119,7 +119,10 @@ data "aws_iam_policy_document" "post_to_ws_api_connections_permissions" {
     statement {
       effect = "Allow"
       actions = ["execute-api:ManageConnections"]
-      resources = ["${aws_apigatewayv2_api.ws_api.arn}/${var.stage}/POST/@connections/*"]
+      resources = [
+        "${aws_apigatewayv2_api.ws_api.execution_arn}/${var.stage}/GET/@connections/*",
+        "${aws_apigatewayv2_api.ws_api.execution_arn}/${var.stage}/POST/@connections/*"
+      ]
     }
 }
 

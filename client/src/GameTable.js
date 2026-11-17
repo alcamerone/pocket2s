@@ -181,6 +181,7 @@ export default class GameTable extends Component {
 						connected={this.state.connected}
 						tableId={this.state.tableId}
 						table={this.state.table}
+						playerId={this.state.playerId}
 						player={this.state.player}
 						conn={this.state.conn}
 					/>
@@ -328,6 +329,7 @@ export default class GameTable extends Component {
 					connected={this.state.connected}
 					tableId={this.state.tableId}
 					table={this.state.table}
+					playerId={this.state.playerId}
 					player={this.state.player}
 					conn={this.state.conn}
 				/>

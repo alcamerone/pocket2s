@@ -23,7 +23,7 @@ export default function Player(props) {
 	return (
 		<div style={{ height: "100%", width: "100%", position: "relative" }}>
 			{props.table.Seats &&
-				props.table.Active.ID === props.table.Seats[props.seat].ID && (
+				props.table.Seats[props.table.ActiveIdx].ID === props.table.Seats[props.seat].ID && (
 					<div
 						style={{
 							position: "absolute",

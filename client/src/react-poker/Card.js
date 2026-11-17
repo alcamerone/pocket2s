@@ -1,4 +1,4 @@
-import React, { PureComponent } from "react";
+import React from "react";
 import CT from "../assets/cards/10C.svg";
 import DT from "../assets/cards/10D.svg";
 import HT from "../assets/cards/10H.svg";
@@ -109,7 +109,7 @@ const cardImgMap = {
   Xx: back // TODO fix bug on player leaving at end of round
 };
 
-class Card extends PureComponent {
+class Card extends React.Component {
   shouldComponentUpdate(nextProps) {
     if (nextProps.rotationY !== this.props.rotationY) {
       return true;
