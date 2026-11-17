@@ -1,4 +1,4 @@
-import React, { Component, Fragment } from "react";
+import React, { Component } from "react";
 import config from "./config.js";
 
 export default class JoinOrStart extends Component {
@@ -152,135 +152,125 @@ export default class JoinOrStart extends Component {
 					</button>
 				</div>
 				<div className="divider" />
-				<span
-					onClick={() =>
-						this.setState({
-							showCreateGameDiv: !this.state.showCreateGameDiv
-						})
-					}
-				>
-					Or, click here to start a room...
-				</span>
-				{this.state.showCreateGameDiv && (
-					<Fragment>
-						<div className="input-block smaller">
-							<div className="input-group">
-								<label htmlFor="create-room-name">Room Name</label>
-								<input
-									id="create-room-name"
-									value={this.state.createRoomName}
-									onChange={(e) => {
-										const createRoomName = this.handleStringInput(
-											e.target.value
-										);
-										if (createRoomName) {
-											this.setState({ createRoomName });
-										}
-									}}
-								/>
-								<div>{this.state.errorCreateRoomName}</div>
-							</div>
-							<div className="input-group half-width">
-								<label htmlFor="buy-in">Buy In</label>
-								<input
-									type="number"
-									id="buy-in"
-									step="0.01"
-									value={this.state.buyIn}
-									onChange={(e) => {
-										const [buyIn, buyInInt] = this.handleFloatInput(
-											e.target.value
-										);
-										if (buyIn && buyInInt) {
-											this.setState({ buyIn, buyInInt });
-										}
-									}}
-								/>
-							</div>
-							<div className="input-group half-width">
-								<label htmlFor="big-blind">Big Blind</label>
-								<input
-									type="number"
-									id="big-blind"
-									step="0.01"
-									value={this.state.bigBlind}
-									onChange={(e) => {
-										const [
-											bigBlind,
-											bigBlindInt
-										] = this.handleFloatInput(e.target.value);
-										if (bigBlind && bigBlindInt) {
-											this.setState({ bigBlind, bigBlindInt });
-										}
-									}}
-								/>
-							</div>
-							<br />
-							<div className="input-group half-width">
-								<label htmlFor="small-blind">Small Blind</label>
-								<input
-									type="number"
-									id="small-blind"
-									value={this.state.smallBlind}
-									step="0.01"
-									onChange={(e) => {
-										const [
-											smallBlind,
-											smallBlindInt
-										] = this.handleFloatInput(e.target.value);
-										if (smallBlind && smallBlindInt) {
-											this.setState({ smallBlind, smallBlindInt });
-										}
-									}}
-								/>
-							</div>
-							<div className="input-group half-width">
-								<label htmlFor="ante">Ante</label>
-								<input
-									type="number"
-									id="ante"
-									value={this.state.ante}
-									step="0.01"
-									onChange={(e) => {
-										const [ante, anteInt] = this.handleInput(
-											e.target.value
-										);
-										if (ante && anteInt) {
-											this.setState({ ante, anteInt });
-										}
-									}}
-								/>
-							</div>
-							<br />
-							<div className="input-group">
-								<label htmlFor="create-room-player-name">
-									Your Player Name
-								</label>
-								<input
-									id="create-room-player-name"
-									value={this.state.createRoomPlayerName}
-									onChange={(e) => {
-										const createRoomPlayerName = this.handleStringInput(
-											e.target.value
-										);
-										if (createRoomPlayerName) {
-											this.setState({ createRoomPlayerName });
-										}
-									}}
-								/>
-								<div>{this.state.errorCreateRoomPlayerName}</div>
-							</div>
-							<button
-								onClick={() => {
-									this.createRoom();
-								}}
-							>
-								Create Room
-							</button>
-						</div>
-						<div className="divider" />
-					</Fragment>
-				)}
+				<h3>
+					Or, start a new room...
+				</h3>
+				<div className="input-block smaller">
+					<div className="input-group">
+						<label htmlFor="create-room-name">Room Name</label>
+						<input
+							id="create-room-name"
+							value={this.state.createRoomName}
+							onChange={(e) => {
+								const createRoomName = this.handleStringInput(
+									e.target.value
+								);
+								if (createRoomName) {
+									this.setState({ createRoomName });
+								}
+							}}
+						/>
+						<div>{this.state.errorCreateRoomName}</div>
+					</div>
+					<div className="input-group half-width">
+						<label htmlFor="buy-in">Buy In</label>
+						<input
+							type="number"
+							id="buy-in"
+							step="0.01"
+							value={this.state.buyIn}
+							onChange={(e) => {
+								const [buyIn, buyInInt] = this.handleFloatInput(
+									e.target.value
+								);
+								if (buyIn && buyInInt) {
+									this.setState({ buyIn, buyInInt });
+								}
+							}}
+						/>
+					</div>
+					<div className="input-group half-width">
+						<label htmlFor="big-blind">Big Blind</label>
+						<input
+							type="number"
+							id="big-blind"
+							step="0.01"
+							value={this.state.bigBlind}
+							onChange={(e) => {
+								const [
+									bigBlind,
+									bigBlindInt
+								] = this.handleFloatInput(e.target.value);
+								if (bigBlind && bigBlindInt) {
+									this.setState({ bigBlind, bigBlindInt });
+								}
+							}}
+						/>
+					</div>
+					<br />
+					<div className="input-group half-width">
+						<label htmlFor="small-blind">Small Blind</label>
+						<input
+							type="number"
+							id="small-blind"
+							value={this.state.smallBlind}
+							step="0.01"
+							onChange={(e) => {
+								const [
+									smallBlind,
+									smallBlindInt
+								] = this.handleFloatInput(e.target.value);
+								if (smallBlind && smallBlindInt) {
+									this.setState({ smallBlind, smallBlindInt });
+								}
+							}}
+						/>
+					</div>
+					<div className="input-group half-width">
+						<label htmlFor="ante">Ante</label>
+						<input
+							type="number"
+							id="ante"
+							value={this.state.ante}
+							step="0.01"
+							onChange={(e) => {
+								const [ante, anteInt] = this.handleInput(
+									e.target.value
+								);
+								if (ante && anteInt) {
+									this.setState({ ante, anteInt });
+								}
+							}}
+						/>
+					</div>
+					<br />
+					<div className="input-group">
+						<label htmlFor="create-room-player-name">
+							Your Player Name
+						</label>
+						<input
+							id="create-room-player-name"
+							value={this.state.createRoomPlayerName}
+							onChange={(e) => {
+								const createRoomPlayerName = this.handleStringInput(
+									e.target.value
+								);
+								if (createRoomPlayerName) {
+									this.setState({ createRoomPlayerName });
+								}
+							}}
+						/>
+						<div>{this.state.errorCreateRoomPlayerName}</div>
+					</div>
+					<button
+						onClick={() => {
+							this.createRoom();
+						}}
+					>
+						Create Room
+					</button>
+				</div>
+				<div className="divider" />
 			</div>
 		);
 	}
