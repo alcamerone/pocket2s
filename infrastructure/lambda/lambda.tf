@@ -76,6 +76,8 @@ resource "aws_lambda_function" "http_handler" {
     runtime = "provided.al2023"
     handler = "bootstrap"
 
+    reserved_concurrent_executions = 10
+
     environment {
       variables = {
         "DDB_ROOM_STATE_TABLE" = var.room_state_ddb_table_name
@@ -91,6 +93,8 @@ resource "aws_lambda_function" "ws_handler" {
     architectures = ["arm64"]
     runtime = "provided.al2023"
     handler = "bootstrap"
+
+    reserved_concurrent_executions = 10
 
      environment {
       variables = {

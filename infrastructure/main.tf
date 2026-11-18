@@ -10,8 +10,22 @@ variable "pocket2s_zone_id" {
     type = string
 }
 
+variable "budget_alert_email" {
+    type = string
+}
+
+variable "monthly_budget_usd" {
+    type = number
+}
+
 provider "aws" {
     region = var.region
+
+    default_tags {
+      tags = {
+        Project = "pocket2s"
+      }
+    }
 }
 
 data "aws_caller_identity" "current" {}
@@ -49,4 +63,40 @@ module "iam" {
     room_state_ddb_table_arn = module.dynamodb.room_state_table_arn
     conn_room_player_mapping_ddb_table_arn = module.dynamodb.conn_room_player_mapping_table_arn
     ws_api_execution_arn = module.apis.ws_api_execution_arn
+}
+
+resource "aws_budgets_budget" "monthly" {
+    name = "Pocket2sMonthlyBudget"
+    budget_type = "COST"
+    limit_amount = tostring(var.monthly_budget_usd)
+    limit_unit = "USD"
+    time_unit = "MONTHLY"
+
+    cost_filter {
+      name = "Service"
+      values = [
+        "Amazon API Gateway",
+        "AWS Lambda",
+        "Amazon DynamoDB",
+        "Amazon CloudWatch"
+      ]
+    }
+
+    # 90% heads-up email
+    notification {
+      comparison_operator = "GREATER_THAN"
+      threshold = 90
+      threshold_type = "PERCENTAGE"
+      notification_type = "ACTUAL"
+      subscriber_email_addresses = [var.budget_alert_email]
+    }
+
+    # Budget exceeded email
+    notification {
+      comparison_operator = "GREATER_THAN"
+      threshold = 100
+      threshold_type = "PERCENTAGE"
+      notification_type = "ACTUAL"
+      subscriber_email_addresses = [var.budget_alert_email]
+    }
 }
