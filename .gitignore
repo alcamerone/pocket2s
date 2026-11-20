@@ -1,10 +1,9 @@
 *.DS_Store
-scripts/*
 *.vscode
 .claude
 infrastructure/.terraform/*
-infrastructure/lambda/http
-infrastructure/lambda/ws
+infrastructure/lambda/http/*
+infrastructure/lambda/ws/*
 *.tfplan
 *tfstate*
 */node_modules
