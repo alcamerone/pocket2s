@@ -3,7 +3,7 @@ module github.com/alcamerone/pocket2s
 go 1.26
 
 require (
-	github.com/alcamerone/joker v0.0.2
+	github.com/alcamerone/joker v0.0.3
 	github.com/aws/aws-lambda-go v1.55.0
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.5

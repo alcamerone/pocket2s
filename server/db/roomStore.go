@@ -70,12 +70,20 @@ func (s *InMemoryRoomStore) DeleteRoom(_ context.Context, id string) error {
 	return nil
 }
 
+// ddbAPI is the subset of the DynamoDB client used by DDBRoomStore.
+// *dynamodb.Client satisfies it.
+type ddbAPI interface {
+	GetItem(ctx context.Context, in *dynamodb.GetItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+	PutItem(ctx context.Context, in *dynamodb.PutItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	DeleteItem(ctx context.Context, in *dynamodb.DeleteItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
+}
+
 type DDBRoomStore struct {
-	ddbClient *dynamodb.Client
+	ddbClient ddbAPI
 	tableName string
 }
 
-func NewDDBRoomStore(ddb *dynamodb.Client, tableName string) *DDBRoomStore {
+func NewDDBRoomStore(ddb ddbAPI, tableName string) *DDBRoomStore {
 	return &DDBRoomStore{
 		ddbClient: ddb,
 		tableName: tableName,
@@ -83,12 +91,8 @@ func NewDDBRoomStore(ddb *dynamodb.Client, tableName string) *DDBRoomStore {
 }
 
 func (s *DDBRoomStore) GetRoom(ctx context.Context, id string) (*room.Room, error) {
-	roomId, err := attributevalue.Marshal(id)
-	if err != nil {
-		return nil, err
-	}
 	resp, err := s.ddbClient.GetItem(ctx, &dynamodb.GetItemInput{
-		Key:       map[string]ddbTypes.AttributeValue{"Id": roomId},
+		Key:       map[string]ddbTypes.AttributeValue{"Id": stringKey(id)},
 		TableName: &s.tableName})
 	if err != nil {
 		return nil, err
@@ -113,7 +117,7 @@ func (s *DDBRoomStore) GetAllRooms(ctx context.Context) ([]*room.Room, error) {
 func (s *DDBRoomStore) NewRoom(ctx context.Context, r *room.Room) error {
 	rs := r.State()
 	rs.ExpiresAt = time.Now().Add(3 * time.Hour).Unix()
-	ddbItem, err := attributevalue.MarshalMap(rs)
+	ddbItem, err := marshalMap(rs)
 	if err != nil {
 		return err
 	}
@@ -137,7 +141,7 @@ func (s *DDBRoomStore) UpdateRoom(ctx context.Context, r *room.Room) error {
 	curr := rState.Version
 	rState.Version += 1
 	rState.ExpiresAt = time.Now().Add(3 * time.Hour).Unix()
-	ddbItem, err := attributevalue.MarshalMap(rState)
+	ddbItem, err := marshalMap(rState)
 	if err != nil {
 		return err
 	}
@@ -162,13 +166,17 @@ func (s *DDBRoomStore) UpdateRoom(ctx context.Context, r *room.Room) error {
 }
 
 func (s *DDBRoomStore) DeleteRoom(ctx context.Context, id string) error {
-	roomId, err := attributevalue.Marshal(id)
-	if err != nil {
-		return err
-	}
-	_, err = s.ddbClient.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	_, err := s.ddbClient.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: &s.tableName,
-		Key:       map[string]ddbTypes.AttributeValue{"Id": roomId},
+		Key:       map[string]ddbTypes.AttributeValue{"Id": stringKey(id)},
 	})
 	return err
+}
+
+// marshalMap is a seam over attributevalue.MarshalMap so that its failure path
+// can be exercised in tests.
+var marshalMap = attributevalue.MarshalMap
+
+func stringKey(v string) ddbTypes.AttributeValue {
+	return &ddbTypes.AttributeValueMemberS{Value: v}
 }

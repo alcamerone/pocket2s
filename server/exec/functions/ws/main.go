@@ -549,6 +549,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error initialising AWS context: %s", err.Error())
 	}
+
+	// Instantiate room store
 	ddbClient := dynamodb.NewFromConfig(cfg)
 	roomStore = db.NewDDBRoomStore(ddbClient, mustEnv("DDB_ROOM_STATE_TABLE"))
 

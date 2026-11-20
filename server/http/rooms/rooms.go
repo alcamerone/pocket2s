@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/alcamerone/joker/table"
 	"github.com/alcamerone/pocket2s/server/db"
@@ -145,11 +144,11 @@ func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
 
 	connId := random.RandomString(9)
 	p, playerExists := r.PlayerMap[playerId]
-	if playerExists {
-		// Get the player's connection.
+	if playerExists && p.ConnectionId != "" {
+		// Get the player's existing connection.
 		// If the connection does not exist, continue to reconnect the player.
 		// Otherwise, reject the request.
-		cExists, err := ctx.Messenger.ConnectionExists(req.Context(), connId)
+		cExists, err := ctx.Messenger.ConnectionExists(req.Context(), p.ConnectionId)
 		if err != nil {
 			log.Printf("error determining if connection exists for player %s in room %s: %s",
 				r.Id,
@@ -212,6 +211,8 @@ func (ctx *Context) handleConnect(rw http.ResponseWriter, req *http.Request) {
 	if errConns != nil {
 		handleConnectionErrors(req.Context(), ctx.Messenger, r, errConns)
 	}
+	// Persist any cleanup made after failed sends
+	ctx.Rooms.UpdateRoom(req.Context(), r)
 	go listenForPlayerMessages(c, connId, ctx.Rooms, ctx.Messenger)
 }
 
@@ -222,13 +223,15 @@ func handleConnectionErrors(
 	errConns []string,
 ) {
 	for _, connId := range errConns {
-		ids := strings.Split(connId, "-")
-		pId := ids[1]
+		p := r.GetPlayerByConnectionId(connId)
+		if p == nil {
+			continue
+		}
+		pId := p.Id
 		log.Printf("Connection %s closed", connId)
 		log.Printf("%s is sitting out pending reconnection", pId)
 
 		// Mark player disconnected
-		p := r.PlayerMap[pId]
 		p.ConnectionId = ""
 		p.SittingOut = true
 		if r.GameTable != nil {
@@ -246,7 +249,7 @@ func handleConnectionErrors(
 		}
 
 		// Clean up connection
-		m.HandleConnectionError(ctx, p.ConnectionId)
+		m.HandleConnectionError(ctx, connId)
 
 		// Broadcast player disconnected state
 		bErrConns := broadcast(ctx, m, r, messaging.ToPlayerMessage{

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"maps"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -19,6 +21,15 @@ import (
 var (
 	ErrInvalidMessageType             = errors.New("messaging: Invalid message type")
 	ErrNoRoomAndPlayerForConnectionId = errors.New("messaging: No room and player matches the provided connection ID")
+	ErrConnectionNotFound             = errors.New("messaging: No connection exists for the provided connection ID")
+)
+
+// Seams over external functions whose failure paths cannot otherwise be reached
+// in tests. They are plain function values so tests can substitute failures.
+var (
+	marshalMap  = attributevalue.MarshalMap
+	jsonMarshal = json.Marshal
+	after       = time.After
 )
 
 type roomAndPlayerId struct {
@@ -60,6 +71,8 @@ type Messenger interface {
 }
 
 type InMemoryMessenger struct {
+	// mu guards both maps: connections are added, removed and read from many goroutines
+	mu                     sync.RWMutex
 	conns                  map[string]*websocket.Conn
 	connsToRoomAndPlayerId map[string]roomAndPlayerId
 }
@@ -71,11 +84,16 @@ func NewInMemoryMessenger() *InMemoryMessenger {
 	}
 }
 
+// Connections returns a copy of the current connection map.
 func (m *InMemoryMessenger) Connections() map[string]*websocket.Conn {
-	return m.conns
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return maps.Clone(m.conns)
 }
 
 func (m *InMemoryMessenger) ConnectionExists(_ context.Context, id string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.conns[id] != nil, nil
 }
 
@@ -84,6 +102,8 @@ func (m *InMemoryMessenger) NewConnection(
 	connId, roomId, playerId string,
 	conn *websocket.Conn,
 ) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.conns[connId] = conn
 	m.connsToRoomAndPlayerId[connId] = roomAndPlayerId{RoomId: roomId, PlayerId: playerId}
 	return nil
@@ -93,6 +113,8 @@ func (m *InMemoryMessenger) GetRoomAndPlayerByConnectionId(_ context.Context, co
 	roomId, playerId string,
 	err error,
 ) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	rpId, ok := m.connsToRoomAndPlayerId[connId]
 	if !ok {
 		return "", "", ErrNoRoomAndPlayerForConnectionId
@@ -101,6 +123,8 @@ func (m *InMemoryMessenger) GetRoomAndPlayerByConnectionId(_ context.Context, co
 }
 
 func (m *InMemoryMessenger) ConnectionExistsForRoom(roomId string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for _, rp := range m.connsToRoomAndPlayerId {
 		if rp.RoomId == roomId {
 			return true
@@ -110,6 +134,12 @@ func (m *InMemoryMessenger) ConnectionExistsForRoom(roomId string) bool {
 }
 
 func (m *InMemoryMessenger) IsClosedConnectionError(err error) bool {
+	// Any close frame, normal or otherwise, ends the connection. Reading again
+	// after such an error panics in the websocket library, so it must not be
+	// treated as a transient failure.
+	if _, isClose := errors.AsType[*websocket.CloseError](err); isClose {
+		return true
+	}
 	errStr := strings.ToLower(err.Error())
 	return strings.Contains(errStr, "use of closed network connection") ||
 		strings.Contains(errStr, "broken pipe") ||
@@ -119,6 +149,8 @@ func (m *InMemoryMessenger) IsClosedConnectionError(err error) bool {
 }
 
 func (m *InMemoryMessenger) HandleConnectionError(_ context.Context, connId string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	c := m.conns[connId]
 	if c != nil {
 		c.Close()
@@ -132,18 +164,39 @@ func (m *InMemoryMessenger) sendMessageTo(
 	connId string,
 	msg ToPlayerMessage,
 ) error {
-	return m.conns[connId].WriteJSON(msg)
+	m.mu.RLock()
+	c := m.conns[connId]
+	m.mu.RUnlock()
+	if c == nil {
+		return ErrConnectionNotFound
+	}
+	return c.WriteJSON(msg)
+}
+
+// apigwAPI is the subset of the API Gateway management client used by LambdaMessenger.
+// *apigatewaymanagementapi.Client satisfies it.
+type apigwAPI interface {
+	GetConnection(ctx context.Context, in *apigatewaymanagementapi.GetConnectionInput, opts ...func(*apigatewaymanagementapi.Options)) (*apigatewaymanagementapi.GetConnectionOutput, error)
+	PostToConnection(ctx context.Context, in *apigatewaymanagementapi.PostToConnectionInput, opts ...func(*apigatewaymanagementapi.Options)) (*apigatewaymanagementapi.PostToConnectionOutput, error)
+}
+
+// ddbAPI is the subset of the DynamoDB client used by LambdaMessenger.
+// *dynamodb.Client satisfies it.
+type ddbAPI interface {
+	GetItem(ctx context.Context, in *dynamodb.GetItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+	PutItem(ctx context.Context, in *dynamodb.PutItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	DeleteItem(ctx context.Context, in *dynamodb.DeleteItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
 }
 
 type LambdaMessenger struct {
-	apigwmapiClient             *apigatewaymanagementapi.Client
-	ddbClient                   *dynamodb.Client
+	apigwmapiClient             apigwAPI
+	ddbClient                   ddbAPI
 	connsToRoomAndPlayerIdTable string
 }
 
 func NewLambdaMessenger(
-	apigwmapiClient *apigatewaymanagementapi.Client,
-	ddbClient *dynamodb.Client,
+	apigwmapiClient apigwAPI,
+	ddbClient ddbAPI,
 	connsToRoomAndPlayerIdTable string,
 ) *LambdaMessenger {
 	return &LambdaMessenger{apigwmapiClient, ddbClient, connsToRoomAndPlayerIdTable}
@@ -168,7 +221,7 @@ func (m *LambdaMessenger) NewConnection(
 	_ *websocket.Conn,
 ) error {
 	// Create entry mapping connection ID to room and player ID
-	ddbItem, err := attributevalue.MarshalMap(roomAndPlayerId{
+	ddbItem, err := marshalMap(roomAndPlayerId{
 		ConnectionId: connId,
 		RoomId:       roomId,
 		PlayerId:     playerId,
@@ -188,12 +241,8 @@ func (m *LambdaMessenger) GetRoomAndPlayerByConnectionId(ctx context.Context, id
 	roomId, playerId string,
 	err error,
 ) {
-	connId, err := attributevalue.Marshal(id)
-	if err != nil {
-		return "", "", err
-	}
 	resp, err := m.ddbClient.GetItem(ctx, &dynamodb.GetItemInput{
-		Key:       map[string]ddbTypes.AttributeValue{"ConnectionId": connId},
+		Key:       map[string]ddbTypes.AttributeValue{"ConnectionId": stringKey(id)},
 		TableName: &m.connsToRoomAndPlayerIdTable,
 	})
 	if err != nil {
@@ -218,15 +267,10 @@ func (m *LambdaMessenger) IsClosedConnectionError(err error) bool {
 
 func (m *LambdaMessenger) HandleConnectionError(ctx context.Context, connId string) {
 	// Remove entry mapping connection ID to room and player ID
-	key, err := attributevalue.Marshal(connId)
-	if err != nil {
-		return
-	}
-
 	// Ignore error; stale mapping is not an issue, just attempt to tidy up
 	m.ddbClient.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: &m.connsToRoomAndPlayerIdTable,
-		Key:       map[string]ddbTypes.AttributeValue{"connectionId": key},
+		Key:       map[string]ddbTypes.AttributeValue{"ConnectionId": stringKey(connId)},
 	})
 }
 
@@ -235,7 +279,7 @@ func (m *LambdaMessenger) sendMessageTo(
 	connId string,
 	msg ToPlayerMessage,
 ) error {
-	jMsg, err := json.Marshal(msg)
+	jMsg, err := jsonMarshal(msg)
 	if err != nil {
 		return err
 	}
@@ -268,11 +312,26 @@ func SendMessageTo(
 			m.HandleConnectionError(ctx, connId)
 			return err
 		}
+		// The connection is already gone and cleaned up, so retrying is pointless
+		// and there is nothing left to tidy.
+		if errors.Is(err, ErrConnectionNotFound) {
+			return err
+		}
 		log.Printf("error sending message to connection %s: %s", connId, err.Error())
-		time.Sleep(backoff)
+		select {
+		case <-after(backoff):
+		case <-ctx.Done():
+			// Cancelled while backing off; abandon the send without treating
+			// the connection as dead.
+			return ctx.Err()
+		}
 		backoff *= 2
 	}
 	// Failed to send message to player after all retries
 	m.HandleConnectionError(ctx, connId)
 	return err
+}
+
+func stringKey(v string) ddbTypes.AttributeValue {
+	return &ddbTypes.AttributeValueMemberS{Value: v}
 }
